@@ -27,6 +27,7 @@ def get_video_info(video_path: Path) -> dict:
         "-print_format", "json",
         "-show_streams",
         "-show_format",
+        "-show_entries", "stream_side_data=rotation",
         str(video_path),
     ]
     result = _run_cmd(cmd, "ffprobe")
@@ -39,9 +40,29 @@ def get_video_info(video_path: Path) -> dict:
     duration = float(info.get("format", {}).get("duration", 0))
     fps_parts = video_stream.get("r_frame_rate", "30/1").split("/")
     fps = float(fps_parts[0]) / float(fps_parts[1]) if len(fps_parts) == 2 else 30.0
+
+    w = int(video_stream["width"])
+    h = int(video_stream["height"])
+
+    # iOS MOV files store rotation as metadata rather than rotating pixels.
+    # ffmpeg auto-rotates during decoding, so the actual output dimensions
+    # are swapped for 90/270 degree rotations. Match that here.
+    rotation = 0
+    for side_data in video_stream.get("side_data_list", []):
+        if "rotation" in side_data:
+            rotation = abs(int(side_data["rotation"]))
+            break
+    # Also check the older top-level tag format
+    if rotation == 0:
+        rotation = abs(int(video_stream.get("tags", {}).get("rotate", 0)))
+
+    if rotation in (90, 270):
+        w, h = h, w
+        logger.info("Rotation metadata=%d°, swapping dimensions to %dx%d", rotation, w, h)
+
     return {
-        "width": int(video_stream["width"]),
-        "height": int(video_stream["height"]),
+        "width": w,
+        "height": h,
         "duration": duration,
         "fps": fps,
         "total_frames": int(duration * fps) if duration else 0,
