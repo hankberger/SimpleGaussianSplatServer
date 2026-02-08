@@ -92,7 +92,7 @@ export default function ProgressBar() {
 
   if (!activeJobId || (!currentStage && !isCompleted && !isFailed)) return null;
 
-  const barColor = isFailed ? '#e74c3c' : isCompleted ? '#2ecc71' : '#7c5bf0';
+  const barColor = isFailed ? '#ef4444' : isCompleted ? '#22c55e' : '#3b82f6';
   const stageLabel = isCompleted
     ? 'Complete!'
     : isFailed
@@ -120,7 +120,7 @@ export default function ProgressBar() {
               cx={RING_SIZE / 2}
               cy={RING_SIZE / 2}
               r={RADIUS}
-              stroke="rgba(255, 255, 255, 0.15)"
+              stroke="rgba(255, 255, 255, 0.1)"
               strokeWidth={STROKE_WIDTH}
               fill="none"
             />
@@ -165,12 +165,14 @@ const styles = StyleSheet.create({
     zIndex: 100,
   },
   pill: {
-    backgroundColor: 'rgba(20, 20, 40, 0.9)',
+    backgroundColor: 'rgba(11, 15, 26, 0.9)',
     borderRadius: 16,
     paddingVertical: 14,
     paddingHorizontal: 16,
     flexDirection: 'row',
     alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#1e293b',
   },
   ringContainer: {
     width: RING_SIZE,
@@ -185,7 +187,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   percentText: {
-    color: '#fff',
+    color: '#f1f5f9',
     fontSize: 10,
     fontWeight: '700',
   },
@@ -194,12 +196,12 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   stageText: {
-    color: '#fff',
+    color: '#f1f5f9',
     fontSize: 15,
     fontWeight: '600',
   },
   detailText: {
-    color: '#aaa',
+    color: '#64748b',
     fontSize: 12,
     marginTop: 2,
   },

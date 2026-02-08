@@ -7,7 +7,7 @@ export default function UploadingOverlay({ progress }) {
   return (
     <View style={styles.overlay}>
       <View style={styles.card}>
-        <ActivityIndicator size="large" color="#7c5bf0" />
+        <ActivityIndicator size="large" color="#3b82f6" />
         <Text style={styles.text}>Uploading video...</Text>
         {progress > 0 && progress < 1 && (
           <Text style={styles.pct}>{pct}%</Text>
@@ -26,20 +26,22 @@ const styles = StyleSheet.create({
     zIndex: 200,
   },
   card: {
-    backgroundColor: '#1a1a2e',
+    backgroundColor: '#111827',
     borderRadius: 16,
     padding: 32,
     alignItems: 'center',
     minWidth: 200,
+    borderWidth: 1,
+    borderColor: '#1e293b',
   },
   text: {
-    color: '#fff',
+    color: '#f1f5f9',
     fontSize: 16,
     fontWeight: '600',
     marginTop: 16,
   },
   pct: {
-    color: '#aaa',
+    color: '#64748b',
     fontSize: 14,
     marginTop: 8,
   },

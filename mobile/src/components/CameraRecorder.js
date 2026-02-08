@@ -60,7 +60,7 @@ export default function CameraRecorder({ onVideoRecorded, onCancel }) {
   if (!permission.granted) {
     return (
       <View style={styles.permissionContainer}>
-        <Ionicons name="camera-outline" size={64} color="#888" />
+        <Ionicons name="camera-outline" size={64} color="#475569" />
         <Text style={styles.permissionText}>Camera access is required to record video</Text>
         <TouchableOpacity style={styles.permissionBtn} onPress={requestPermission}>
           <Text style={styles.permissionBtnText}>Grant Permission</Text>
@@ -122,20 +122,20 @@ const styles = StyleSheet.create({
   },
   permissionContainer: {
     flex: 1,
-    backgroundColor: '#1a1a2e',
+    backgroundColor: '#0b0f1a',
     alignItems: 'center',
     justifyContent: 'center',
     padding: 32,
   },
   permissionText: {
-    color: '#ccc',
+    color: '#94a3b8',
     fontSize: 16,
     textAlign: 'center',
     marginTop: 16,
     marginBottom: 24,
   },
   permissionBtn: {
-    backgroundColor: '#7c5bf0',
+    backgroundColor: '#2563eb',
     paddingHorizontal: 24,
     paddingVertical: 12,
     borderRadius: 8,
@@ -151,7 +151,7 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
   },
   cancelBtnText: {
-    color: '#888',
+    color: '#64748b',
     fontSize: 16,
   },
   timerContainer: {
@@ -169,7 +169,7 @@ const styles = StyleSheet.create({
     width: 8,
     height: 8,
     borderRadius: 4,
-    backgroundColor: '#e74c3c',
+    backgroundColor: '#ef4444',
     marginRight: 8,
   },
   timerText: {

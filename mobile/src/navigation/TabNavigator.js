@@ -12,12 +12,12 @@ export default function TabNavigator() {
       screenOptions={{
         headerShown: false,
         tabBarStyle: {
-          backgroundColor: '#1a1a2e',
-          borderTopColor: '#2a2a4a',
+          backgroundColor: '#0b0f1a',
+          borderTopColor: '#1e293b',
           borderTopWidth: 1,
         },
-        tabBarActiveTintColor: '#7c5bf0',
-        tabBarInactiveTintColor: '#888',
+        tabBarActiveTintColor: '#3b82f6',
+        tabBarInactiveTintColor: '#475569',
       }}
     >
       <Tab.Screen
