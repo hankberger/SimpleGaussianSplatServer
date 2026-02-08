@@ -142,6 +142,9 @@ def train_gaussians(
         # Scale threshold for split vs clone: gaussians larger than this get split
         scene_extent = np.linalg.norm(points.max(axis=0) - points.min(axis=0))
         split_scale_thresh = scene_extent * 0.01
+        # Max scale: prune/clamp gaussians exceeding 10% of scene extent
+        max_scale_thresh = scene_extent * 0.1
+        log_max_scale = np.log(max(max_scale_thresh, 1e-6))
 
         # Scale densification end proportionally with training length
         densify_end = max(settings.densify_end, int(max_steps * 0.7))
@@ -250,12 +253,15 @@ def train_gaussians(
 
                 # Prune near-transparent gaussians
                 alive = torch.sigmoid(logit_opacities) > 0.005
+                # Prune oversized gaussians (needle artifacts in sky)
+                max_per_gaussian = torch.exp(log_scales).max(dim=-1).values
+                alive = alive & (max_per_gaussian < max_scale_thresh)
                 if (~alive).sum() > 0 and alive.sum() > 100:
                     n_before = len(means)
                     means, log_scales, quats, logit_opacities, sh_coeffs, optimizer, grad_accum, grad_count = (
                         _prune(means, log_scales, quats, logit_opacities, sh_coeffs, alive, optimizer)
                     )
-                    logger.info("Pruned %d transparent gaussians (%d -> %d)", n_before - len(means), n_before, len(means))
+                    logger.info("Pruned %d gaussians (transparent + oversized) (%d -> %d)", n_before - len(means), n_before, len(means))
 
                 # Opacity reset: force optimizer to re-justify each gaussian
                 if (
@@ -268,6 +274,10 @@ def train_gaussians(
                     logit_opacities.data.copy_(logit_opacities_reset)
 
             optimizer.step()
+
+            # Clamp scales to prevent needle artifacts
+            with torch.no_grad():
+                log_scales.data.clamp_(max=log_max_scale)
 
             # Log SH degree activation
             if active_sh_degree > 0 and step in sh_activation_steps:
