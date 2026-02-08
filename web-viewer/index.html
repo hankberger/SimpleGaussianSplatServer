@@ -235,6 +235,58 @@
 		<div id="caminfo">
 			<span id="camid"></span>
 		</div>
+
+		<div id="help-hint" style="
+			position: absolute; bottom: 60px; right: 16px; z-index: 1001;
+			color: rgba(255,255,255,0.7); font-size: 13px; pointer-events: none;
+			transition: opacity 1s ease;
+		">? for help</div>
+
+		<div id="help-overlay" style="
+			display: none; position: absolute; inset: 0; z-index: 2000;
+			background: rgba(0,0,0,0.75); backdrop-filter: blur(6px);
+			align-items: center; justify-content: center; color: #eee; font-size: 14px;
+		">
+			<div style="
+				max-width: 520px; width: 90%; padding: 28px 32px; border-radius: 12px;
+				background: rgba(30,30,30,0.9); border: 1px solid rgba(255,255,255,0.15);
+			">
+				<h2 style="margin:0 0 16px; font-size: 18px; color: #fff;">Controls</h2>
+				<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 18px;">
+					<div>
+						<h3 style="margin:0 0 8px; font-size: 14px; color: #aaa;">Mouse</h3>
+						<div style="line-height: 1.7;">
+							<b>Left drag</b> — Orbit<br>
+							<b>Right drag</b> — Pan<br>
+							<b>Scroll</b> — Dolly in/out<br>
+							<b>Ctrl+Scroll</b> — Orbit<br>
+							<b>Shift+Scroll</b> — Pan
+						</div>
+					</div>
+					<div>
+						<h3 style="margin:0 0 8px; font-size: 14px; color: #aaa;">Keyboard</h3>
+						<div style="line-height: 1.7;">
+							<b>Arrows</b> — Move<br>
+							<b>Shift+Arrows</b> — Move up/down<br>
+							<b>WASD</b> — Look<br>
+							<b>IJKL</b> — Orbit<br>
+							<b>QE</b> — Roll<br>
+							<b>P</b> — Carousel<br>
+							<b>V</b> — Save view
+						</div>
+					</div>
+				</div>
+				<div style="margin-top: 14px;">
+					<h3 style="margin:0 0 8px; font-size: 14px; color: #aaa;">Touch</h3>
+					<div style="line-height: 1.7;">
+						<b>1 finger</b> — Orbit &nbsp;|&nbsp;
+						<b>2 fingers</b> — Pan, pinch to zoom, rotate
+					</div>
+				</div>
+				<div style="margin-top: 16px; text-align: center; color: #666; font-size: 12px;">Press <b>?</b> to close</div>
+			</div>
+		</div>
+
 		<script src="main.js"></script>
 	</body>
 </html>

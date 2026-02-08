@@ -295,6 +295,74 @@ function translate4(a, x, y, z) {
     ];
 }
 
+function computeSceneBounds(splatData, vertexCount) {
+    const f_buffer = new Float32Array(splatData.buffer, splatData.byteOffset, splatData.byteLength / 4);
+    let minX = Infinity, minY = Infinity, minZ = Infinity;
+    let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
+    // Each row is 32 bytes = 8 floats; positions are at offsets 0, 1, 2
+    for (let i = 0; i < vertexCount; i++) {
+        const x = f_buffer[8 * i + 0];
+        const y = f_buffer[8 * i + 1];
+        const z = f_buffer[8 * i + 2];
+        if (x < minX) minX = x; if (x > maxX) maxX = x;
+        if (y < minY) minY = y; if (y > maxY) maxY = y;
+        if (z < minZ) minZ = z; if (z > maxZ) maxZ = z;
+    }
+    const center = [(minX + maxX) / 2, (minY + maxY) / 2, (minZ + maxZ) / 2];
+    const radius = Math.max(
+        Math.hypot(maxX - minX, maxY - minY, maxZ - minZ) / 2,
+        0.1
+    );
+    return { center, radius };
+}
+
+function getOrbitDepth(inv, center) {
+    // Project sceneCenter onto the camera's forward axis (local Z)
+    // inv is the camera-to-world matrix; camera position is (inv[12], inv[13], inv[14])
+    // forward direction is (inv[8], inv[9], inv[10])
+    const dx = center[0] - inv[12];
+    const dy = center[1] - inv[13];
+    const dz = center[2] - inv[14];
+    const d = dx * inv[8] + dy * inv[9] + dz * inv[10];
+    return Math.max(d, 0.5);
+}
+
+function frameScene(center, radius) {
+    // Position camera looking at center from a distance that fits the bounding sphere
+    const distance = radius * 2.5;
+    // Look along -Z in world space (camera faces +Z in its local space)
+    // Place camera at center offset back along Z
+    const eye = [center[0], center[1], center[2] - distance];
+    // Build a simple look-at view matrix (camera at eye, looking at center, up = Y)
+    const fwd = [0, 0, 1]; // normalized (center - eye)
+    const up = [0, 1, 0];
+    const right = [1, 0, 0]; // cross(fwd, up) for this simple case
+    // View matrix (world-to-camera): columns are right, up, fwd, then translation
+    return [
+        right[0], up[0], fwd[0], 0,
+        right[1], up[1], fwd[1], 0,
+        right[2], up[2], fwd[2], 0,
+        -eye[0] * right[0] - eye[1] * right[1] - eye[2] * right[2],
+        -eye[0] * up[0]    - eye[1] * up[1]    - eye[2] * up[2],
+        -eye[0] * fwd[0]   - eye[1] * fwd[1]   - eye[2] * fwd[2],
+        1,
+    ];
+}
+
+function correctRoll(viewMatrix, strength) {
+    // Gradually align camera's local up vector with world Y
+    let inv = invert4(viewMatrix);
+    // Camera's local X axis in world space: (inv[0], inv[1], inv[2])
+    // Camera's local Y axis in world space: (inv[4], inv[5], inv[6])
+    // We want the local Y to align with world Y = (0,1,0)
+    // Roll angle = atan2(localX.y, localY.y)
+    const roll = Math.atan2(inv[1], inv[5]);
+    if (Math.abs(roll) < 0.0001) return viewMatrix;
+    const correction = -roll * strength;
+    inv = rotate4(inv, correction, 0, 0, 1);
+    return invert4(inv);
+}
+
 function createWorker(self) {
     let buffer;
     let vertexCount = 0;
@@ -736,6 +804,8 @@ let defaultViewMatrix = [
     0.03, 6.55, 1,
 ];
 let viewMatrix = defaultViewMatrix;
+let sceneCenter = [0, 0, 0];
+let sceneRadius = 4;
 async function main() {
     let carousel = true;
     const params = new URLSearchParams(location.search);
@@ -911,9 +981,29 @@ async function main() {
     window.addEventListener("resize", resize);
     resize();
 
+    let hasHashView = false;
+    try {
+        JSON.parse(decodeURIComponent(location.hash.slice(1)));
+        hasHashView = true;
+    } catch (err) {}
+
+    function onSceneLoaded(data, count) {
+        const bounds = computeSceneBounds(data, count);
+        sceneCenter = bounds.center;
+        sceneRadius = bounds.radius;
+        if (!hasHashView) {
+            const framed = frameScene(sceneCenter, sceneRadius);
+            defaultViewMatrix = framed;
+            viewMatrix = framed;
+        }
+    }
+
     worker.onmessage = (e) => {
         if (e.data.buffer) {
             splatData = new Uint8Array(e.data.buffer);
+            // PLY→splat conversion complete — compute bounds
+            const vc = Math.floor(splatData.length / rowLength);
+            if (vc > 0) onSceneLoaded(splatData, vc);
             if (e.data.save) {
                 const blob = new Blob([splatData.buffer], {
                     type: "application/octet-stream",
@@ -995,6 +1085,12 @@ async function main() {
             carousel = true;
             camid.innerText = "";
         }
+        // Toggle help overlay with ? key
+        if (e.key === "?") {
+            const overlay = document.getElementById("help-overlay");
+            const visible = overlay.style.display === "flex";
+            overlay.style.display = visible ? "none" : "flex";
+        }
     });
     window.addEventListener("keyup", (e) => {
         activeKeys = activeKeys.filter((k) => k !== e.code);
@@ -1017,29 +1113,28 @@ async function main() {
                       : 1;
             let inv = invert4(viewMatrix);
             if (e.shiftKey) {
+                // Pan (screen-space X/Y)
                 inv = translate4(
                     inv,
-                    (e.deltaX * scale) / innerWidth,
-                    (e.deltaY * scale) / innerHeight,
+                    (2 * e.deltaX * scale) / innerWidth,
+                    (2 * e.deltaY * scale) / innerHeight,
                     0,
                 );
             } else if (e.ctrlKey || e.metaKey) {
-                // inv = rotate4(inv,  (e.deltaX * scale) / innerWidth,  0, 0, 1);
-                // inv = translate4(inv,  0, (e.deltaY * scale) / innerHeight, 0);
-                // let preY = inv[13];
+                // Orbit (Ctrl+scroll)
+                let d = getOrbitDepth(inv, sceneCenter);
+                inv = translate4(inv, 0, 0, d);
+                inv = rotate4(inv, -(e.deltaX * scale) / innerWidth, 0, 1, 0);
+                inv = rotate4(inv, (e.deltaY * scale) / innerHeight, 1, 0, 0);
+                inv = translate4(inv, 0, 0, -d);
+            } else {
+                // Dolly toward/away from scene center
                 inv = translate4(
                     inv,
                     0,
                     0,
                     (-3 * (e.deltaY * scale)) / innerHeight,
                 );
-                // inv[13] = preY;
-            } else {
-                let d = 4;
-                inv = translate4(inv, 0, 0, d);
-                inv = rotate4(inv, -(e.deltaX * scale) / innerWidth, 0, 1, 0);
-                inv = rotate4(inv, (e.deltaY * scale) / innerHeight, 1, 0, 0);
-                inv = translate4(inv, 0, 0, -d);
             }
 
             viewMatrix = invert4(inv);
@@ -1078,7 +1173,7 @@ async function main() {
             let inv = invert4(viewMatrix);
             let dx = (2 * (e.clientX - startX)) / innerWidth;
             let dy = (2 * (e.clientY - startY)) / innerHeight;
-            let d = 4;
+            let d = getOrbitDepth(inv, sceneCenter);
 
             inv = translate4(inv, 0, 0, d);
             inv = rotate4(inv, dx, 0, 1, 0);
@@ -1093,15 +1188,12 @@ async function main() {
             startY = e.clientY;
         } else if (down == 2) {
             let inv = invert4(viewMatrix);
-            // inv = rotateY(inv, );
-            // let preY = inv[13];
             inv = translate4(
                 inv,
-                (-3 * (e.clientX - startX)) / innerWidth,
+                (-2 * (e.clientX - startX)) / innerWidth,
+                (-2 * (e.clientY - startY)) / innerHeight,
                 0,
-                (3 * (e.clientY - startY)) / innerHeight,
             );
-            // inv[13] = preY;
             viewMatrix = invert4(inv);
 
             startX = e.clientX;
@@ -1160,7 +1252,7 @@ async function main() {
                 touchVelocityX = dx;
                 touchVelocityY = dy;
 
-                let d = 4;
+                let d = getOrbitDepth(inv, sceneCenter);
                 inv = translate4(inv, 0, 0, d);
                 inv = rotate4(inv, dx, 0, 1, 0);
                 inv = rotate4(inv, -dy, 1, 0, 0);
@@ -1199,8 +1291,7 @@ async function main() {
                 let inv = invert4(viewMatrix);
                 inv = rotate4(inv, dtheta, 0, 0, 1);
 
-                // Boosted pan multiplier for responsiveness
-                inv = translate4(inv, (-1.5 * dx) / innerWidth, (-1.5 * dy) / innerHeight, 0);
+                inv = translate4(inv, (-2 * dx) / innerWidth, (-2 * dy) / innerHeight, 0);
 
                 inv = translate4(inv, 0, 0, 1.5 * (1 - dscale));
 
@@ -1266,7 +1357,7 @@ async function main() {
 
         // Apply touch inertia (momentum after finger lift)
         if (Math.abs(touchVelocityX) > INERTIA_THRESHOLD || Math.abs(touchVelocityY) > INERTIA_THRESHOLD) {
-            let d = 4;
+            let d = getOrbitDepth(inv, sceneCenter);
             inv = translate4(inv, 0, 0, d);
             inv = rotate4(inv, touchVelocityX, 0, 1, 0);
             inv = rotate4(inv, -touchVelocityY, 1, 0, 0);
@@ -1395,7 +1486,7 @@ async function main() {
         if (
             ["KeyJ", "KeyK", "KeyL", "KeyI"].some((k) => activeKeys.includes(k))
         ) {
-            let d = 4;
+            let d = getOrbitDepth(inv, sceneCenter);
             inv = translate4(inv, 0, 0, d);
             inv = rotate4(
                 inv,
@@ -1424,11 +1515,17 @@ async function main() {
 
         viewMatrix = invert4(inv);
 
+        // Correct roll drift (disable when Q/E roll keys are active)
+        if (!activeKeys.includes("KeyQ") && !activeKeys.includes("KeyE") && !carousel) {
+            viewMatrix = correctRoll(viewMatrix, 0.05);
+        }
+
         if (carousel) {
             let inv = invert4(defaultViewMatrix);
 
             const t = Math.sin((Date.now() - start) / 5000);
-            inv = translate4(inv, 2.5 * t, 0, 6 * (1 - Math.cos(t)));
+            const r = sceneRadius;
+            inv = translate4(inv, 0.6 * r * t, 0, 1.5 * r * (1 - Math.cos(t)));
             inv = rotate4(inv, -0.6 * t, 0, 1, 0);
 
             viewMatrix = invert4(inv);
@@ -1459,7 +1556,7 @@ async function main() {
         } else {
             gl.clear(gl.COLOR_BUFFER_BIT);
             document.getElementById("spinner").style.display = "";
-            start = Date.now() + 2000;
+            start = Date.now();
         }
         const progress = (100 * vertexCount) / (splatData.length / rowLength);
         if (progress < 100) {
@@ -1476,6 +1573,15 @@ async function main() {
     };
 
     frame();
+
+    // Fade out help hint after 3 seconds
+    setTimeout(() => {
+        const hint = document.getElementById("help-hint");
+        if (hint) {
+            hint.style.opacity = "0";
+            setTimeout(() => hint.remove(), 1000);
+        }
+    }, 3000);
 
     const isPly = (splatData) =>
         splatData[0] == 112 &&
@@ -1602,10 +1708,12 @@ async function main() {
             if (isPly(splatData)) {
                 worker.postMessage({ ply: splatData.buffer, save: false });
             } else {
+                const vc = Math.floor(bytesRead / rowLength);
                 worker.postMessage({
                     buffer: splatData.buffer,
-                    vertexCount: Math.floor(bytesRead / rowLength),
+                    vertexCount: vc,
                 });
+                if (vc > 0) onSceneLoaded(splatData, vc);
             }
         }
     }
@@ -1613,9 +1721,9 @@ async function main() {
     // Handle menu selection
     splatSelect.addEventListener("change", (e) => {
         if (e.target.value) {
-            viewMatrix = defaultViewMatrix;
+            hasHashView = false;
             carousel = true;
-            start = Date.now() + 2000;
+            start = Date.now();
             loadSplatFromUrl(e.target.value);
         }
     });
@@ -1648,10 +1756,12 @@ async function main() {
             // ply file magic header means it should be handled differently
             worker.postMessage({ ply: splatData.buffer, save: false });
         } else {
+            const vc = Math.floor(bytesRead / rowLength);
             worker.postMessage({
                 buffer: splatData.buffer,
-                vertexCount: Math.floor(bytesRead / rowLength),
+                vertexCount: vc,
             });
+            if (vc > 0) onSceneLoaded(splatData, vc);
         }
     }
 }
