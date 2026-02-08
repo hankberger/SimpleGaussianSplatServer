@@ -166,7 +166,7 @@ export default function ViewerScreen() {
   /* ---- dwell timer for detail mode ---- */
   useEffect(() => {
     if (mode === 'detail' && currentItem) {
-      startDwellTimer(currentItem.job_id);
+      startDwellTimer(currentItem.post_id);
     }
   }, [mode, currentItem, startDwellTimer]);
 
@@ -242,7 +242,7 @@ export default function ViewerScreen() {
           }
         } else if (data.type === 'doubleTap') {
           if (currentItem && !currentItem.liked_by_me) {
-            handleLike(currentItem.job_id);
+            handleLike(currentItem.post_id);
           }
           showHeartAnimation();
         }
@@ -310,7 +310,7 @@ export default function ViewerScreen() {
           <View style={styles.cardFooter}>
             <TouchableOpacity
               style={styles.cardAction}
-              onPress={() => handleLike(item.job_id)}
+              onPress={() => handleLike(item.post_id)}
               activeOpacity={0.7}
             >
               <Ionicons
@@ -336,7 +336,7 @@ export default function ViewerScreen() {
     [visibleIndex, openDetail, handleLike]
   );
 
-  const keyExtractor = useCallback((item) => item.job_id, []);
+  const keyExtractor = useCallback((item) => item.post_id, []);
 
   /* ================================================================ *
    *  RENDER — Loading / Error / Empty states                          *
@@ -471,7 +471,7 @@ export default function ViewerScreen() {
               {/* Like */}
               <TouchableOpacity
                 style={styles.sidebarItem}
-                onPress={() => handleLike(currentItem?.job_id)}
+                onPress={() => handleLike(currentItem?.post_id)}
                 activeOpacity={0.7}
               >
                 <Ionicons

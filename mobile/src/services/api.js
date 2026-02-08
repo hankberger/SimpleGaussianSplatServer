@@ -85,16 +85,16 @@ export async function getFeed(limit = 10, offset = 0) {
   return response.json();
 }
 
-export async function trackView(jobId) {
+export async function trackView(postId) {
   // Fire-and-forget — don't await or throw on failure
-  fetch(`${API_BASE}/api/v1/feed/${jobId}/view`, {
+  fetch(`${API_BASE}/api/v1/feed/${postId}/view`, {
     method: 'POST',
     headers: authHeaders(),
   }).catch(() => {});
 }
 
-export async function likeSplat(jobId) {
-  const response = await fetch(`${API_BASE}/api/v1/feed/${jobId}/like`, {
+export async function likeSplat(postId) {
+  const response = await fetch(`${API_BASE}/api/v1/feed/${postId}/like`, {
     method: 'POST',
     headers: authHeaders(),
   });
@@ -104,8 +104,8 @@ export async function likeSplat(jobId) {
   return response.json();
 }
 
-export async function unlikeSplat(jobId) {
-  const response = await fetch(`${API_BASE}/api/v1/feed/${jobId}/like`, {
+export async function unlikeSplat(postId) {
+  const response = await fetch(`${API_BASE}/api/v1/feed/${postId}/like`, {
     method: 'DELETE',
     headers: authHeaders(),
   });

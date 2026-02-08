@@ -1,4 +1,4 @@
-import type { JobRow, JobStatus, StageProgress, FeedItem, UserRow } from "../types";
+import type { JobRow, JobStatus, StageProgress, FeedItem, UserRow, PostRow } from "../types";
 
 export async function insertJob(
   db: D1Database,
@@ -9,7 +9,8 @@ export async function insertJob(
     max_frames: number;
     training_iterations: number;
     resolution: number;
-  }
+  },
+  userId?: string | null
 ): Promise<void> {
   const stages: StageProgress[] = [
     { name: "frame_extraction", status: "pending" },
@@ -20,8 +21,8 @@ export async function insertJob(
 
   await db
     .prepare(
-      `INSERT INTO jobs (id, video_key, output_format, max_frames, training_iterations, resolution, stages)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`
+      `INSERT INTO jobs (id, video_key, output_format, max_frames, training_iterations, resolution, stages, user_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
     )
     .bind(
       id,
@@ -30,7 +31,8 @@ export async function insertJob(
       config.max_frames,
       config.training_iterations,
       config.resolution,
-      JSON.stringify(stages)
+      JSON.stringify(stages),
+      userId ?? null
     )
     .run();
 }
@@ -101,36 +103,57 @@ export async function setJobResultKey(
     .bind(resultKey, id)
     .run();
 
-  return result.meta.changes > 0;
+  if (result.meta.changes > 0) {
+    // Create a corresponding post row
+    const job = await db
+      .prepare("SELECT id, user_id, output_format FROM jobs WHERE id = ?")
+      .bind(id)
+      .first<{ id: string; user_id: string | null; output_format: string }>();
+
+    if (job) {
+      await db
+        .prepare(
+          `INSERT INTO posts (id, user_id, result_key, output_format)
+           VALUES (?, ?, ?, ?)`
+        )
+        .bind(job.id, job.user_id, resultKey, job.output_format)
+        .run();
+    }
+    return true;
+  }
+
+  return false;
+}
+
+export interface PostWithAuthor extends PostRow {
+  display_name: string | null;
 }
 
 export async function getFeedItems(
   db: D1Database,
   limit: number,
   offset: number
-): Promise<JobRow[]> {
+): Promise<PostWithAuthor[]> {
   const results = await db
     .prepare(
-      `SELECT * FROM jobs
-       WHERE status = 'completed' AND result_key IS NOT NULL
+      `SELECT p.*, u.display_name
+       FROM posts p
+       LEFT JOIN users u ON p.user_id = u.id
        ORDER BY (
-         view_count * 0.3
-         + like_count * 1.0
-         + (86400.0 / (strftime('%s','now') - strftime('%s',created_at) + 3600))
+         p.view_count * 0.3
+         + p.like_count * 1.0
+         + (86400.0 / (strftime('%s','now') - strftime('%s',p.created_at) + 3600))
        ) DESC
        LIMIT ? OFFSET ?`
     )
     .bind(limit, offset)
-    .all<JobRow>();
+    .all<PostWithAuthor>();
   return results.results;
 }
 
 export async function getFeedCount(db: D1Database): Promise<number> {
   const result = await db
-    .prepare(
-      `SELECT COUNT(*) as count FROM jobs
-       WHERE status = 'completed' AND result_key IS NOT NULL`
-    )
+    .prepare("SELECT COUNT(*) as count FROM posts")
     .first<{ count: number }>();
   return result?.count ?? 0;
 }
@@ -141,8 +164,7 @@ export async function incrementViewCount(
 ): Promise<boolean> {
   const result = await db
     .prepare(
-      `UPDATE jobs SET view_count = view_count + 1
-       WHERE id = ? AND status = 'completed'`
+      "UPDATE posts SET view_count = view_count + 1 WHERE id = ?"
     )
     .bind(id)
     .run();
@@ -213,20 +235,19 @@ export async function getUserById(db: D1Database, id: string): Promise<UserRow |
 export async function insertLike(
   db: D1Database,
   userId: string,
-  jobId: string
+  postId: string
 ): Promise<boolean> {
   try {
     await db
-      .prepare("INSERT INTO likes (user_id, job_id) VALUES (?, ?)")
-      .bind(userId, jobId)
+      .prepare("INSERT INTO likes (user_id, job_id, post_id) VALUES (?, ?, ?)")
+      .bind(userId, postId, postId)
       .run();
-    // Increment denormalized like_count
+    // Increment denormalized like_count on posts
     await db
       .prepare(
-        `UPDATE jobs SET like_count = like_count + 1
-         WHERE id = ? AND status = 'completed'`
+        "UPDATE posts SET like_count = like_count + 1 WHERE id = ?"
       )
-      .bind(jobId)
+      .bind(postId)
       .run();
     return true;
   } catch (e: any) {
@@ -239,37 +260,36 @@ export async function insertLike(
 export async function removeLike(
   db: D1Database,
   userId: string,
-  jobId: string
+  postId: string
 ): Promise<boolean> {
   const result = await db
-    .prepare("DELETE FROM likes WHERE user_id = ? AND job_id = ?")
-    .bind(userId, jobId)
+    .prepare("DELETE FROM likes WHERE user_id = ? AND post_id = ?")
+    .bind(userId, postId)
     .run();
   if (result.meta.changes > 0) {
     await db
       .prepare(
-        `UPDATE jobs SET like_count = MAX(0, like_count - 1)
-         WHERE id = ? AND status = 'completed'`
+        "UPDATE posts SET like_count = MAX(0, like_count - 1) WHERE id = ?"
       )
-      .bind(jobId)
+      .bind(postId)
       .run();
     return true;
   }
   return false;
 }
 
-export async function getUserLikedJobIds(
+export async function getUserLikedPostIds(
   db: D1Database,
   userId: string,
-  jobIds: string[]
+  postIds: string[]
 ): Promise<Set<string>> {
-  if (jobIds.length === 0) return new Set();
-  const placeholders = jobIds.map(() => "?").join(",");
+  if (postIds.length === 0) return new Set();
+  const placeholders = postIds.map(() => "?").join(",");
   const results = await db
     .prepare(
-      `SELECT job_id FROM likes WHERE user_id = ? AND job_id IN (${placeholders})`
+      `SELECT post_id FROM likes WHERE user_id = ? AND post_id IN (${placeholders})`
     )
-    .bind(userId, ...jobIds)
-    .all<{ job_id: string }>();
-  return new Set(results.results.map((r) => r.job_id));
+    .bind(userId, ...postIds)
+    .all<{ post_id: string }>();
+  return new Set(results.results.map((r) => r.post_id));
 }

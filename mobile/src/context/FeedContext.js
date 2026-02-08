@@ -35,12 +35,12 @@ export function FeedProvider({ children }) {
     }
   }, [items.length]);
 
-  const startDwellTimer = useCallback((jobId) => {
+  const startDwellTimer = useCallback((postId) => {
     if (dwellTimer.current) clearTimeout(dwellTimer.current);
-    if (trackedIds.current.has(jobId)) return;
+    if (trackedIds.current.has(postId)) return;
     dwellTimer.current = setTimeout(() => {
-      trackedIds.current.add(jobId);
-      trackView(jobId);
+      trackedIds.current.add(postId);
+      trackView(postId);
     }, VIEW_DWELL_MS);
   }, []);
 
@@ -72,12 +72,12 @@ export function FeedProvider({ children }) {
     setCurrentIndex((prev) => Math.max(0, prev - 1));
   }, []);
 
-  const toggleLike = useCallback(async (jobId, isAuthenticated) => {
+  const toggleLike = useCallback(async (postId, isAuthenticated) => {
     if (!isAuthenticated) {
       return { needsAuth: true };
     }
 
-    const item = items.find((i) => i.job_id === jobId);
+    const item = items.find((i) => i.post_id === postId);
     if (!item) return {};
 
     const wasLiked = item.liked_by_me;
@@ -85,7 +85,7 @@ export function FeedProvider({ children }) {
     // Optimistic update
     setItems((prev) =>
       prev.map((i) =>
-        i.job_id === jobId
+        i.post_id === postId
           ? {
               ...i,
               liked_by_me: !wasLiked,
@@ -99,15 +99,15 @@ export function FeedProvider({ children }) {
 
     try {
       if (wasLiked) {
-        await unlikeSplat(jobId);
+        await unlikeSplat(postId);
       } else {
-        await likeSplat(jobId);
+        await likeSplat(postId);
       }
     } catch {
       // Rollback on failure
       setItems((prev) =>
         prev.map((i) =>
-          i.job_id === jobId
+          i.post_id === postId
             ? {
                 ...i,
                 liked_by_me: wasLiked,

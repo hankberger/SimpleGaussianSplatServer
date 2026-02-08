@@ -1,0 +1,30 @@
+# DUSt3R is cloned fresh in the build stage
+dust3r/
+
+# Non-server services
+mobile/
+web-viewer/
+render-queue/
+node_modules/
+
+# Job artifacts
+jobs/
+*.splat
+*.ply
+
+# Git and environment
+.git
+.env
+.env.*
+
+# Python caches
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store
+*.swp

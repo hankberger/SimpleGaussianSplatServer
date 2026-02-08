@@ -36,6 +36,20 @@ export interface JobRow {
   error: string | null;
   view_count: number;
   like_count: number;
+  user_id: string | null;
+}
+
+export interface PostRow {
+  id: string;
+  user_id: string | null;
+  result_key: string;
+  output_format: string;
+  title: string | null;
+  description: string | null;
+  view_count: number;
+  like_count: number;
+  created_at: string;
+  updated_at: string;
 }
 
 export interface JobConfig {
@@ -61,7 +75,12 @@ export interface JobCreateResponse {
 }
 
 export interface FeedItem {
-  job_id: string;
+  post_id: string;
+  job_id: string; // backward compat (same value as post_id)
+  user_id: string | null;
+  display_name: string | null;
+  title: string | null;
+  description: string | null;
   created_at: string;
   view_count: number;
   like_count: number;
@@ -84,6 +103,7 @@ export interface UserRow {
 export interface LikeRow {
   user_id: string;
   job_id: string;
+  post_id: string | null;
   created_at: string;
 }
 

@@ -1,11 +1,12 @@
 import { Hono } from "hono";
-import type { Env, JobStatusResponse, JobCreateResponse } from "../types";
+import type { Env, AppVariables, JobStatusResponse, JobCreateResponse } from "../types";
 import { insertJob, getJob } from "../db/queries";
+import { optionalAuth } from "../middleware/jwt-auth";
 
-const jobs = new Hono<{ Bindings: Env }>();
+const jobs = new Hono<{ Bindings: Env; Variables: AppVariables }>();
 
 // POST /api/v1/jobs — Accept video upload, store in R2, create D1 row
-jobs.post("/", async (c) => {
+jobs.post("/", optionalAuth(), async (c) => {
   const formData = await c.req.formData();
   const video = formData.get("video");
 
@@ -34,12 +35,13 @@ jobs.post("/", async (c) => {
   });
 
   // Insert job row in D1
+  const userId = c.get("userId") || null;
   await insertJob(c.env.DB, jobId, videoKey, {
     output_format: outputFormat,
     max_frames: maxFrames,
     training_iterations: trainingIterations,
     resolution,
-  });
+  }, userId);
 
   const response: JobCreateResponse = {
     job_id: jobId,

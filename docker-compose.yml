@@ -1,0 +1,26 @@
+services:
+  splatapp-server:
+    build: .
+    ports:
+      - "8000:8000"
+    volumes:
+      - splatapp-jobs:/app/jobs
+      - splatapp-models:/app/.cache/huggingface
+    environment:
+      - SPLAT_GPU_DEVICE=cuda:0
+      - SPLAT_JOBS_DIR=/app/jobs
+      # Uncomment for queue-worker mode:
+      # - SPLAT_QUEUE_URL=https://your-worker.workers.dev
+      # - SPLAT_QUEUE_API_KEY=your-key
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    restart: unless-stopped
+
+volumes:
+  splatapp-jobs:
+  splatapp-models:
