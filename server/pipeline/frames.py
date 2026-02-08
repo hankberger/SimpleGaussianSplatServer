@@ -19,6 +19,48 @@ def _run_cmd(cmd: list[str], description: str) -> subprocess.CompletedProcess:
     return result
 
 
+def normalize_video(video_path: Path) -> Path:
+    """Re-encode video to H.264/MP4 if it isn't already. Returns path to normalized file."""
+    cmd = [
+        settings.ffprobe_path,
+        "-v", "quiet",
+        "-print_format", "json",
+        "-show_streams",
+        str(video_path),
+    ]
+    result = _run_cmd(cmd, "ffprobe codec check")
+    info = json.loads(result.stdout)
+    video_stream = next(
+        (s for s in info.get("streams", []) if s["codec_type"] == "video"), None
+    )
+    if not video_stream:
+        raise ValueError("No video stream found in input file")
+
+    codec = video_stream.get("codec_name", "").lower()
+    container = video_path.suffix.lower()
+    logger.info("Input video codec=%s container=%s", codec, container)
+
+    if codec == "h264" and container == ".mp4":
+        logger.info("Video is already H.264/MP4, skipping normalization")
+        return video_path
+
+    normalized_path = video_path.parent / "input_normalized.mp4"
+    logger.info("Normalizing video from %s/%s to H.264/MP4", codec, container)
+    cmd = [
+        settings.ffmpeg_path,
+        "-i", str(video_path),
+        "-c:v", "libx264",
+        "-preset", "fast",
+        "-crf", "23",
+        "-an",
+        str(normalized_path),
+        "-y",
+    ]
+    _run_cmd(cmd, "video normalization to H.264/MP4")
+    logger.info("Video normalized: %s", normalized_path)
+    return normalized_path
+
+
 def get_video_info(video_path: Path) -> dict:
     """Get video metadata via ffprobe."""
     cmd = [

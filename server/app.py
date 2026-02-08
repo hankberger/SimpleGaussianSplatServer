@@ -301,8 +301,9 @@ async def process_job(job_id: str):
 
 
 def _run_frame_extraction(video_path: Path, job_dir: Path, config: JobConfig) -> list[Path]:
-    from server.pipeline.frames import extract_frames, filter_blurry_frames
+    from server.pipeline.frames import extract_frames, filter_blurry_frames, normalize_video
 
+    video_path = normalize_video(video_path)
     frames_dir = job_dir / "frames"
     frame_paths = extract_frames(
         video_path, frames_dir, config.max_frames, config.resolution
