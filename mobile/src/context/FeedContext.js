@@ -44,6 +44,16 @@ export function FeedProvider({ children }) {
     }, VIEW_DWELL_MS);
   }, []);
 
+  const selectItem = useCallback((index) => {
+    if (dwellTimer.current) clearTimeout(dwellTimer.current);
+    setCurrentIndex(index);
+  }, []);
+
+  const loadMore = useCallback(() => {
+    if (loading || items.length >= total) return;
+    loadFeed(false);
+  }, [loading, items.length, total, loadFeed]);
+
   const goNext = useCallback(() => {
     if (dwellTimer.current) clearTimeout(dwellTimer.current);
     setCurrentIndex((prev) => {
@@ -125,6 +135,8 @@ export function FeedProvider({ children }) {
         loading,
         error,
         loadFeed,
+        loadMore,
+        selectItem,
         goNext,
         goPrevious,
         startDwellTimer,

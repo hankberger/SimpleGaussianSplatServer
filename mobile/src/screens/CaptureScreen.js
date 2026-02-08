@@ -10,13 +10,16 @@ import { CameraView, useCameraPermissions } from 'expo-camera';
 import * as ImagePicker from 'expo-image-picker';
 import * as Haptics from 'expo-haptics';
 import { Ionicons } from '@expo/vector-icons';
+import { useAuth } from '../context/AuthContext';
 import { useJob } from '../context/JobContext';
 import { checkHealth } from '../services/api';
 import { MAX_RECORD_SECONDS } from '../config';
 import RecordButton from '../components/RecordButton';
 import UploadingOverlay from '../components/UploadingOverlay';
+import AuthModal from '../components/AuthModal';
 
 export default function CaptureScreen() {
+  const { isAuthenticated } = useAuth();
   const { startUpload, isUploading, uploadError, uploadProgress } = useJob();
   const cameraRef = useRef(null);
   const [permission, requestPermission] = useCameraPermissions();
@@ -24,6 +27,8 @@ export default function CaptureScreen() {
   const [elapsed, setElapsed] = useState(0);
   const [serverOnline, setServerOnline] = useState(null);
   const [facing, setFacing] = useState('back');
+  const [showAuthModal, setShowAuthModal] = useState(false);
+  const pendingVideoUri = useRef(null);
   const timerRef = useRef(null);
   const intervalRef = useRef(null);
 
@@ -58,6 +63,30 @@ export default function CaptureScreen() {
     if (uploadError) Alert.alert('Upload Failed', uploadError);
   }, [uploadError]);
 
+  const tryUpload = useCallback((videoUri) => {
+    if (!isAuthenticated) {
+      pendingVideoUri.current = videoUri;
+      setShowAuthModal(true);
+    } else {
+      startUpload(videoUri);
+    }
+  }, [isAuthenticated, startUpload]);
+
+  // When user signs in with a pending video, auto-upload it
+  useEffect(() => {
+    if (isAuthenticated && pendingVideoUri.current) {
+      const uri = pendingVideoUri.current;
+      pendingVideoUri.current = null;
+      setShowAuthModal(false);
+      startUpload(uri);
+    }
+  }, [isAuthenticated, startUpload]);
+
+  const handleAuthModalClose = useCallback(() => {
+    setShowAuthModal(false);
+    pendingVideoUri.current = null;
+  }, []);
+
   const startRecording = useCallback(async () => {
     if (!cameraRef.current || isRecording) return;
     setIsRecording(true);
@@ -68,14 +97,14 @@ export default function CaptureScreen() {
         maxDuration: MAX_RECORD_SECONDS,
       });
       if (video?.uri) {
-        startUpload(video.uri);
+        tryUpload(video.uri);
       }
     } catch (err) {
       console.warn('Recording error:', err);
     } finally {
       setIsRecording(false);
     }
-  }, [isRecording, startUpload]);
+  }, [isRecording, tryUpload]);
 
   const stopRecording = useCallback(() => {
     if (cameraRef.current && isRecording) {
@@ -91,12 +120,12 @@ export default function CaptureScreen() {
         quality: 1,
       });
       if (!result.canceled && result.assets?.[0]?.uri) {
-        startUpload(result.assets[0].uri);
+        tryUpload(result.assets[0].uri);
       }
     } catch (err) {
       Alert.alert('Error', 'Failed to pick video from gallery');
     }
-  }, [startUpload]);
+  }, [tryUpload]);
 
   const formatTime = (secs) => {
     const m = Math.floor(secs / 60).toString().padStart(2, '0');
@@ -131,6 +160,9 @@ export default function CaptureScreen() {
         mode="video"
         facing={facing}
       />
+
+      {/* Auth modal */}
+      <AuthModal visible={showAuthModal} onClose={handleAuthModalClose} />
 
       {/* Upload overlay */}
       {isUploading && <UploadingOverlay progress={uploadProgress} />}

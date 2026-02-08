@@ -10,14 +10,16 @@ import {
   KeyboardAvoidingView,
   Platform,
   ScrollView,
+  Modal,
 } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
 import * as AppleAuthentication from 'expo-apple-authentication';
 import { useAuth } from '../context/AuthContext';
 import { registerUser, loginUser, oauthLogin } from '../services/api';
 
-export default function AuthScreen() {
+export default function AuthModal({ visible, onClose }) {
   const { saveSession } = useAuth();
-  const [mode, setMode] = useState('login'); // 'login' or 'register'
+  const [mode, setMode] = useState('login');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [displayName, setDisplayName] = useState('');
@@ -38,6 +40,7 @@ export default function AuthScreen() {
         result = await loginUser(email.trim(), password);
       }
       await saveSession(result.token, result.user);
+      onClose?.();
     } catch (err) {
       Alert.alert('Error', err.message);
     } finally {
@@ -66,6 +69,7 @@ export default function AuthScreen() {
 
       const result = await oauthLogin('apple', credential.identityToken, name);
       await saveSession(result.token, result.user);
+      onClose?.();
     } catch (err) {
       if (err.code !== 'ERR_REQUEST_CANCELED') {
         Alert.alert('Error', err.message || 'Apple Sign In failed');
@@ -76,86 +80,94 @@ export default function AuthScreen() {
   };
 
   return (
-    <KeyboardAvoidingView
-      style={styles.container}
-      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-    >
-      <ScrollView contentContainerStyle={styles.scrollContent} keyboardShouldPersistTaps="handled">
-        <Text style={styles.title}>{mode === 'login' ? 'Sign In' : 'Create Account'}</Text>
-        <Text style={styles.subtitle}>
-          {mode === 'login' ? 'Welcome back' : 'Join to save your likes'}
-        </Text>
+    <Modal visible={visible} animationType="slide" presentationStyle="pageSheet" onRequestClose={onClose}>
+      <KeyboardAvoidingView
+        style={styles.container}
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+      >
+        {onClose && (
+          <TouchableOpacity style={styles.closeButton} onPress={onClose}>
+            <Ionicons name="close" size={24} color="#94a3b8" />
+          </TouchableOpacity>
+        )}
 
-        {mode === 'register' && (
+        <ScrollView contentContainerStyle={styles.scrollContent} keyboardShouldPersistTaps="handled">
+          <Text style={styles.title}>{mode === 'login' ? 'Sign In' : 'Create Account'}</Text>
+          <Text style={styles.subtitle}>
+            {mode === 'login' ? 'Welcome back' : 'Join to save your likes'}
+          </Text>
+
+          {mode === 'register' && (
+            <TextInput
+              style={styles.input}
+              placeholder="Display name (optional)"
+              placeholderTextColor="#64748b"
+              value={displayName}
+              onChangeText={setDisplayName}
+              autoCapitalize="words"
+            />
+          )}
+
           <TextInput
             style={styles.input}
-            placeholder="Display name (optional)"
+            placeholder="Email"
             placeholderTextColor="#64748b"
-            value={displayName}
-            onChangeText={setDisplayName}
-            autoCapitalize="words"
+            value={email}
+            onChangeText={setEmail}
+            keyboardType="email-address"
+            autoCapitalize="none"
+            autoCorrect={false}
           />
-        )}
 
-        <TextInput
-          style={styles.input}
-          placeholder="Email"
-          placeholderTextColor="#64748b"
-          value={email}
-          onChangeText={setEmail}
-          keyboardType="email-address"
-          autoCapitalize="none"
-          autoCorrect={false}
-        />
+          <TextInput
+            style={styles.input}
+            placeholder="Password"
+            placeholderTextColor="#64748b"
+            value={password}
+            onChangeText={setPassword}
+            secureTextEntry
+          />
 
-        <TextInput
-          style={styles.input}
-          placeholder="Password"
-          placeholderTextColor="#64748b"
-          value={password}
-          onChangeText={setPassword}
-          secureTextEntry
-        />
+          <TouchableOpacity style={styles.submitButton} onPress={handleSubmit} disabled={loading}>
+            {loading ? (
+              <ActivityIndicator color="#fff" />
+            ) : (
+              <Text style={styles.submitText}>
+                {mode === 'login' ? 'Sign In' : 'Create Account'}
+              </Text>
+            )}
+          </TouchableOpacity>
 
-        <TouchableOpacity style={styles.submitButton} onPress={handleSubmit} disabled={loading}>
-          {loading ? (
-            <ActivityIndicator color="#fff" />
-          ) : (
-            <Text style={styles.submitText}>
-              {mode === 'login' ? 'Sign In' : 'Create Account'}
-            </Text>
+          <View style={styles.divider}>
+            <View style={styles.dividerLine} />
+            <Text style={styles.dividerText}>or</Text>
+            <View style={styles.dividerLine} />
+          </View>
+
+          {Platform.OS === 'ios' && (
+            <AppleAuthentication.AppleAuthenticationButton
+              buttonType={AppleAuthentication.AppleAuthenticationButtonType.SIGN_IN}
+              buttonStyle={AppleAuthentication.AppleAuthenticationButtonStyle.WHITE}
+              cornerRadius={8}
+              style={styles.appleButton}
+              onPress={handleAppleSignIn}
+            />
           )}
-        </TouchableOpacity>
 
-        <View style={styles.divider}>
-          <View style={styles.dividerLine} />
-          <Text style={styles.dividerText}>or</Text>
-          <View style={styles.dividerLine} />
-        </View>
-
-        {Platform.OS === 'ios' && (
-          <AppleAuthentication.AppleAuthenticationButton
-            buttonType={AppleAuthentication.AppleAuthenticationButtonType.SIGN_IN}
-            buttonStyle={AppleAuthentication.AppleAuthenticationButtonStyle.WHITE}
-            cornerRadius={8}
-            style={styles.appleButton}
-            onPress={handleAppleSignIn}
-          />
-        )}
-
-        <TouchableOpacity
-          style={styles.switchButton}
-          onPress={() => setMode(mode === 'login' ? 'register' : 'login')}
-        >
-          <Text style={styles.switchText}>
-            {mode === 'login' ? "Don't have an account? " : 'Already have an account? '}
-            <Text style={styles.switchTextBold}>
-              {mode === 'login' ? 'Sign Up' : 'Sign In'}
+          <TouchableOpacity
+            style={styles.switchButton}
+            onPress={() => setMode(mode === 'login' ? 'register' : 'login')}
+          >
+            <Text style={styles.switchText}>
+              {mode === 'login' ? "Don't have an account? " : 'Already have an account? '}
+              <Text style={styles.switchTextBold}>
+                {mode === 'login' ? 'Sign Up' : 'Sign In'}
+              </Text>
             </Text>
-          </Text>
-        </TouchableOpacity>
-      </ScrollView>
-    </KeyboardAvoidingView>
+          </TouchableOpacity>
+        </ScrollView>
+      </KeyboardAvoidingView>
+    </Modal>
   );
 }
 
@@ -163,6 +175,18 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: '#0b0f1a',
+  },
+  closeButton: {
+    position: 'absolute',
+    top: 16,
+    right: 16,
+    zIndex: 10,
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: '#1e293b',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   scrollContent: {
     flexGrow: 1,

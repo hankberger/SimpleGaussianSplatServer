@@ -1,46 +1,98 @@
-import React from 'react';
-import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
+import React, { useState } from 'react';
+import { View, Text, TouchableOpacity, StyleSheet, ScrollView, Linking } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../context/AuthContext';
-import AuthScreen from './AuthScreen';
+import AuthModal from '../components/AuthModal';
+
+const DISCORD_URL = 'https://discord.gg/YOUR_INVITE'; // TODO: replace with real invite
+
+function MenuRow({ icon, label, onPress, color = '#f1f5f9', iconColor = '#94a3b8' }) {
+  return (
+    <TouchableOpacity style={styles.menuRow} onPress={onPress} activeOpacity={0.6}>
+      <View style={styles.menuRowLeft}>
+        <Ionicons name={icon} size={20} color={iconColor} />
+        <Text style={[styles.menuRowLabel, { color }]}>{label}</Text>
+      </View>
+      <Ionicons name="chevron-forward" size={18} color="#334155" />
+    </TouchableOpacity>
+  );
+}
 
 export default function ProfileScreen() {
   const { user, isAuthenticated, logout } = useAuth();
+  const [showAuth, setShowAuth] = useState(false);
 
-  if (!isAuthenticated) {
-    return <AuthScreen />;
-  }
-
-  const providerLabel = {
-    email: 'Email',
-    google: 'Google',
-    apple: 'Apple',
-  }[user.provider] || user.provider;
+  const providerLabel = isAuthenticated
+    ? ({ email: 'Email', google: 'Google', apple: 'Apple' }[user.provider] || user.provider)
+    : null;
 
   return (
     <View style={styles.container}>
-      <View style={styles.header}>
-        <View style={styles.avatar}>
-          <Ionicons name="person" size={40} color="#64748b" />
-        </View>
-        <Text style={styles.displayName}>
-          {user.display_name || 'User'}
-        </Text>
-        <Text style={styles.email}>{user.email}</Text>
-        <View style={styles.providerBadge}>
-          <Ionicons
-            name={user.provider === 'apple' ? 'logo-apple' : user.provider === 'google' ? 'logo-google' : 'mail-outline'}
-            size={14}
-            color="#94a3b8"
-          />
-          <Text style={styles.providerText}>Signed in with {providerLabel}</Text>
-        </View>
-      </View>
+      <ScrollView contentContainerStyle={styles.scrollContent}>
+        {/* Profile header */}
+        <View style={styles.header}>
+          <View style={styles.avatar}>
+            <Ionicons
+              name={isAuthenticated ? 'person' : 'person-outline'}
+              size={40}
+              color={isAuthenticated ? '#64748b' : '#475569'}
+            />
+          </View>
 
-      <TouchableOpacity style={styles.signOutButton} onPress={logout}>
-        <Ionicons name="log-out-outline" size={20} color="#ef4444" />
-        <Text style={styles.signOutText}>Sign Out</Text>
-      </TouchableOpacity>
+          {isAuthenticated ? (
+            <>
+              <Text style={styles.displayName}>{user.display_name || 'User'}</Text>
+              <Text style={styles.email}>{user.email}</Text>
+              <View style={styles.providerBadge}>
+                <Ionicons
+                  name={user.provider === 'apple' ? 'logo-apple' : user.provider === 'google' ? 'logo-google' : 'mail-outline'}
+                  size={14}
+                  color="#94a3b8"
+                />
+                <Text style={styles.providerText}>Signed in with {providerLabel}</Text>
+              </View>
+            </>
+          ) : (
+            <>
+              <Text style={styles.displayName}>Not signed in</Text>
+              <Text style={styles.subtitle}>Sign in to upload videos and save your likes</Text>
+              <TouchableOpacity style={styles.signInButton} onPress={() => setShowAuth(true)}>
+                <Text style={styles.signInText}>Sign In / Sign Up</Text>
+              </TouchableOpacity>
+            </>
+          )}
+        </View>
+
+        {/* Menu */}
+        <View style={styles.menuSection}>
+          <MenuRow
+            icon="logo-discord"
+            label="Join the Discord community"
+            iconColor="#5865F2"
+            onPress={() => Linking.openURL(DISCORD_URL)}
+          />
+          <MenuRow
+            icon="settings-outline"
+            label="Settings"
+            onPress={() => {/* TODO: navigate to settings */}}
+          />
+        </View>
+
+        {/* Sign out */}
+        {isAuthenticated && (
+          <View style={styles.menuSection}>
+            <MenuRow
+              icon="log-out-outline"
+              label="Sign Out"
+              color="#ef4444"
+              iconColor="#ef4444"
+              onPress={logout}
+            />
+          </View>
+        )}
+      </ScrollView>
+
+      <AuthModal visible={showAuth} onClose={() => setShowAuth(false)} />
     </View>
   );
 }
@@ -49,12 +101,15 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: '#0b0f1a',
-    padding: 24,
-    justifyContent: 'space-between',
+  },
+  scrollContent: {
+    paddingHorizontal: 24,
+    paddingBottom: 40,
   },
   header: {
     alignItems: 'center',
     paddingTop: 80,
+    paddingBottom: 32,
   },
   avatar: {
     width: 80,
@@ -67,14 +122,20 @@ const styles = StyleSheet.create({
   },
   displayName: {
     color: '#f1f5f9',
-    fontSize: 24,
+    fontSize: 22,
     fontWeight: '700',
     marginBottom: 4,
   },
   email: {
     color: '#94a3b8',
-    fontSize: 16,
+    fontSize: 15,
     marginBottom: 12,
+  },
+  subtitle: {
+    color: '#64748b',
+    fontSize: 15,
+    textAlign: 'center',
+    marginBottom: 20,
   },
   providerBadge: {
     flexDirection: 'row',
@@ -89,19 +150,38 @@ const styles = StyleSheet.create({
     color: '#94a3b8',
     fontSize: 13,
   },
-  signOutButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: '#1e293b',
-    padding: 14,
+  signInButton: {
+    backgroundColor: '#2563eb',
+    paddingHorizontal: 32,
+    paddingVertical: 14,
     borderRadius: 8,
-    gap: 8,
-    marginBottom: 40,
   },
-  signOutText: {
-    color: '#ef4444',
+  signInText: {
+    color: '#fff',
     fontSize: 16,
     fontWeight: '600',
+  },
+  menuSection: {
+    backgroundColor: '#1e293b',
+    borderRadius: 12,
+    overflow: 'hidden',
+    marginBottom: 16,
+  },
+  menuRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: '#334155',
+  },
+  menuRowLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+  menuRowLabel: {
+    fontSize: 16,
   },
 });
