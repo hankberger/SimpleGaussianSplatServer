@@ -1,0 +1,28 @@
+# Dependencies
+dust3r/
+renderer/node_modules/
+
+# Job artifacts
+jobs/
+*.splat
+*.ply
+
+# Python
+__pycache__/
+*.pyc
+*.egg-info/
+.eggs/
+
+# Environment
+*.sh
+.env
+.venv/
+env/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
