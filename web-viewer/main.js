@@ -744,6 +744,13 @@ async function main() {
         carousel = false;
     } catch (err) {}
 
+    // Hide menu in feed mode
+    const feedMode = params.get("feed") === "1";
+    if (feedMode) {
+        const splatMenu = document.getElementById("splat-menu");
+        if (splatMenu) splatMenu.style.display = "none";
+    }
+
     // Populate the splat menu
     const splatSelect = document.getElementById("splat-select");
     let splats = [];
@@ -787,8 +794,17 @@ async function main() {
         throw new Error(req.status + " Unable to load " + req.url);
 
     const rowLength = 3 * 4 + 3 * 4 + 4 + 4;
-    const reader = req.body.getReader();
-    let splatData = new Uint8Array(req.headers.get("content-length"));
+    const contentLength = req.headers.get("content-length");
+    let reader, splatData;
+    if (contentLength) {
+        reader = req.body.getReader();
+        splatData = new Uint8Array(parseInt(contentLength, 10));
+    } else {
+        // Cross-origin R2 fetch may lack content-length; read full buffer
+        const buf = await req.arrayBuffer();
+        splatData = new Uint8Array(buf);
+        reader = null;
+    }
 
     const downsample =
         splatData.length / rowLength > 500000 ? 1 : 1 / devicePixelRatio;
@@ -1550,25 +1566,37 @@ async function main() {
         if (loadReq.status != 200)
             throw new Error(loadReq.status + " Unable to load " + loadReq.url);
 
-        splatData = new Uint8Array(loadReq.headers.get("content-length"));
-        const loadReader = loadReq.body.getReader();
+        const loadContentLength = loadReq.headers.get("content-length");
+        let loadReader;
+        if (loadContentLength) {
+            splatData = new Uint8Array(parseInt(loadContentLength, 10));
+            loadReader = loadReq.body.getReader();
+        } else {
+            const buf = await loadReq.arrayBuffer();
+            splatData = new Uint8Array(buf);
+            loadReader = null;
+        }
 
-        while (true) {
-            const { done, value } = await loadReader.read();
-            if (done || stopLoading) break;
+        if (loadReader) {
+            while (true) {
+                const { done, value } = await loadReader.read();
+                if (done || stopLoading) break;
 
-            splatData.set(value, bytesRead);
-            bytesRead += value.length;
+                splatData.set(value, bytesRead);
+                bytesRead += value.length;
 
-            if (vertexCount > lastVertexCount) {
-                if (!isPly(splatData)) {
-                    worker.postMessage({
-                        buffer: splatData.buffer,
-                        vertexCount: Math.floor(bytesRead / rowLength),
-                    });
+                if (vertexCount > lastVertexCount) {
+                    if (!isPly(splatData)) {
+                        worker.postMessage({
+                            buffer: splatData.buffer,
+                            vertexCount: Math.floor(bytesRead / rowLength),
+                        });
+                    }
+                    lastVertexCount = vertexCount;
                 }
-                lastVertexCount = vertexCount;
             }
+        } else {
+            bytesRead = splatData.length;
         }
         if (!stopLoading) {
             if (isPly(splatData)) {
@@ -1593,22 +1621,27 @@ async function main() {
     });
 
     // Initial load stream
-    while (true) {
-        const { done, value } = await reader.read();
-        if (done || stopLoading) break;
+    if (reader) {
+        while (true) {
+            const { done, value } = await reader.read();
+            if (done || stopLoading) break;
 
-        splatData.set(value, bytesRead);
-        bytesRead += value.length;
+            splatData.set(value, bytesRead);
+            bytesRead += value.length;
 
-        if (vertexCount > lastVertexCount) {
-            if (!isPly(splatData)) {
-                worker.postMessage({
-                    buffer: splatData.buffer,
-                    vertexCount: Math.floor(bytesRead / rowLength),
-                });
+            if (vertexCount > lastVertexCount) {
+                if (!isPly(splatData)) {
+                    worker.postMessage({
+                        buffer: splatData.buffer,
+                        vertexCount: Math.floor(bytesRead / rowLength),
+                    });
+                }
+                lastVertexCount = vertexCount;
             }
-            lastVertexCount = vertexCount;
         }
+    } else {
+        // Full buffer already loaded (cross-origin fallback)
+        bytesRead = splatData.length;
     }
     if (!stopLoading) {
         if (isPly(splatData)) {

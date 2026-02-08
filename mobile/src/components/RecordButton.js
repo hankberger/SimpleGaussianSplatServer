@@ -1,12 +1,18 @@
 import React, { useEffect, useRef } from 'react';
 import { View, TouchableOpacity, StyleSheet, Animated } from 'react-native';
+import Svg, { Circle } from 'react-native-svg';
 
 const BUTTON_SIZE = 72;
 const RING_SIZE = 88;
+const STROKE_WIDTH = 3.5;
+const RADIUS = (RING_SIZE - STROKE_WIDTH) / 2;
+const CIRCUMFERENCE = 2 * Math.PI * RADIUS;
+
+const AnimatedCircle = Animated.createAnimatedComponent(Circle);
 
 export default function RecordButton({ isRecording, onPress, progress }) {
   const pulseAnim = useRef(new Animated.Value(1)).current;
-  const ringProgress = useRef(new Animated.Value(0)).current;
+  const animatedProgress = useRef(new Animated.Value(0)).current;
 
   // Pulsing animation while recording
   useEffect(() => {
@@ -32,35 +38,52 @@ export default function RecordButton({ isRecording, onPress, progress }) {
     }
   }, [isRecording]);
 
-  // Ring progress animation
+  // Animate progress smoothly
   useEffect(() => {
-    Animated.timing(ringProgress, {
+    Animated.timing(animatedProgress, {
       toValue: progress || 0,
-      duration: 200,
+      duration: 300,
       useNativeDriver: false,
     }).start();
   }, [progress]);
 
+  const strokeDashoffset = animatedProgress.interpolate({
+    inputRange: [0, 1],
+    outputRange: [CIRCUMFERENCE, 0],
+  });
+
   return (
     <View style={styles.wrapper}>
-      {/* Progress ring background */}
-      <View style={styles.ringBg}>
-        <Animated.View
-          style={[
-            styles.ringFill,
-            {
-              transform: [
-                {
-                  rotate: ringProgress.interpolate({
-                    inputRange: [0, 1],
-                    outputRange: ['0deg', '360deg'],
-                  }),
-                },
-              ],
-            },
-          ]}
+      {/* SVG progress ring */}
+      <Svg
+        width={RING_SIZE}
+        height={RING_SIZE}
+        style={styles.ringSvg}
+      >
+        {/* Background track */}
+        <Circle
+          cx={RING_SIZE / 2}
+          cy={RING_SIZE / 2}
+          r={RADIUS}
+          stroke="rgba(255, 255, 255, 0.2)"
+          strokeWidth={STROKE_WIDTH}
+          fill="none"
         />
-      </View>
+        {/* Animated progress arc */}
+        <AnimatedCircle
+          cx={RING_SIZE / 2}
+          cy={RING_SIZE / 2}
+          r={RADIUS}
+          stroke="#e74c3c"
+          strokeWidth={STROKE_WIDTH}
+          fill="none"
+          strokeLinecap="round"
+          strokeDasharray={CIRCUMFERENCE}
+          strokeDashoffset={strokeDashoffset}
+          rotation="-90"
+          origin={`${RING_SIZE / 2}, ${RING_SIZE / 2}`}
+        />
+      </Svg>
       <TouchableOpacity onPress={onPress} activeOpacity={0.7}>
         <Animated.View
           style={[
@@ -83,25 +106,8 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  ringBg: {
+  ringSvg: {
     position: 'absolute',
-    width: RING_SIZE,
-    height: RING_SIZE,
-    borderRadius: RING_SIZE / 2,
-    borderWidth: 3,
-    borderColor: 'rgba(255, 255, 255, 0.2)',
-  },
-  ringFill: {
-    position: 'absolute',
-    width: RING_SIZE,
-    height: RING_SIZE,
-    borderRadius: RING_SIZE / 2,
-    borderWidth: 3,
-    borderColor: '#e74c3c',
-    borderTopColor: 'transparent',
-    borderRightColor: 'transparent',
-    top: -3,
-    left: -3,
   },
   button: {
     width: BUTTON_SIZE,

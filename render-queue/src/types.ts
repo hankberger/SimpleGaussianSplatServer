@@ -2,6 +2,7 @@ export interface Env {
   ASSETS: R2Bucket;
   DB: D1Database;
   WORKER_API_KEY: string;
+  R2_PUBLIC_URL: string;
 }
 
 export type JobStatus = "queued" | "claimed" | "processing" | "completed" | "failed";
@@ -25,6 +26,7 @@ export interface JobRow {
   result_key: string | null;
   stages: string; // JSON array of StageProgress
   error: string | null;
+  view_count: number;
 }
 
 export interface JobConfig {
@@ -47,4 +49,18 @@ export interface JobCreateResponse {
   job_id: string;
   status: JobStatus;
   message: string;
+}
+
+export interface FeedItem {
+  job_id: string;
+  created_at: string;
+  view_count: number;
+  splat_url: string;
+}
+
+export interface FeedResponse {
+  items: FeedItem[];
+  total: number;
+  offset: number;
+  limit: number;
 }

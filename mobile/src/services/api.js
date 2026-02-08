@@ -56,3 +56,16 @@ export async function checkHealth() {
   }
   return response.json();
 }
+
+export async function getFeed(limit = 10, offset = 0) {
+  const response = await fetch(`${API_BASE}/api/v1/feed?limit=${limit}&offset=${offset}`);
+  if (!response.ok) {
+    throw new Error(`Failed to load feed (${response.status})`);
+  }
+  return response.json();
+}
+
+export async function trackView(jobId) {
+  // Fire-and-forget — don't await or throw on failure
+  fetch(`${API_BASE}/api/v1/feed/${jobId}/view`, { method: 'POST' }).catch(() => {});
+}

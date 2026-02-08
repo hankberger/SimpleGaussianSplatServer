@@ -1,4 +1,4 @@
-import type { JobRow, JobStatus, StageProgress } from "../types";
+import type { JobRow, JobStatus, StageProgress, FeedItem } from "../types";
 
 export async function insertJob(
   db: D1Database,
@@ -101,5 +101,49 @@ export async function setJobResultKey(
     .bind(resultKey, id)
     .run();
 
+  return result.meta.changes > 0;
+}
+
+export async function getFeedItems(
+  db: D1Database,
+  limit: number,
+  offset: number
+): Promise<JobRow[]> {
+  const results = await db
+    .prepare(
+      `SELECT * FROM jobs
+       WHERE status = 'completed' AND result_key IS NOT NULL
+       ORDER BY (
+         view_count * 0.3
+         + (86400.0 / (strftime('%s','now') - strftime('%s',created_at) + 3600))
+       ) DESC
+       LIMIT ? OFFSET ?`
+    )
+    .bind(limit, offset)
+    .all<JobRow>();
+  return results.results;
+}
+
+export async function getFeedCount(db: D1Database): Promise<number> {
+  const result = await db
+    .prepare(
+      `SELECT COUNT(*) as count FROM jobs
+       WHERE status = 'completed' AND result_key IS NOT NULL`
+    )
+    .first<{ count: number }>();
+  return result?.count ?? 0;
+}
+
+export async function incrementViewCount(
+  db: D1Database,
+  id: string
+): Promise<boolean> {
+  const result = await db
+    .prepare(
+      `UPDATE jobs SET view_count = view_count + 1
+       WHERE id = ? AND status = 'completed'`
+    )
+    .bind(id)
+    .run();
   return result.meta.changes > 0;
 }

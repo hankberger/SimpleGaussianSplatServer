@@ -3,6 +3,7 @@ import { cors } from "hono/cors";
 import type { Env } from "./types";
 import jobs from "./routes/jobs";
 import worker from "./routes/worker";
+import feed from "./routes/feed";
 
 const app = new Hono<{ Bindings: Env }>();
 
@@ -11,6 +12,9 @@ app.use("/*", cors());
 
 // Client-facing routes
 app.route("/api/v1/jobs", jobs);
+
+// Feed routes (recommendation feed)
+app.route("/api/v1/feed", feed);
 
 // GPU server routes (API key protected in the router)
 app.route("/api/v1/worker", worker);

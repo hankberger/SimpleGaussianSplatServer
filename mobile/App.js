@@ -2,6 +2,7 @@ import React from 'react';
 import { StatusBar } from 'expo-status-bar';
 import { NavigationContainer, createNavigationContainerRef } from '@react-navigation/native';
 import { JobProvider } from './src/context/JobContext';
+import { FeedProvider } from './src/context/FeedContext';
 import TabNavigator from './src/navigation/TabNavigator';
 
 const navigationRef = createNavigationContainerRef();
@@ -9,10 +10,12 @@ const navigationRef = createNavigationContainerRef();
 export default function App() {
   return (
     <JobProvider navigationRef={navigationRef}>
-      <NavigationContainer ref={navigationRef}>
-        <TabNavigator />
-        <StatusBar style="light" />
-      </NavigationContainer>
+      <FeedProvider>
+        <NavigationContainer ref={navigationRef}>
+          <TabNavigator />
+          <StatusBar style="light" />
+        </NavigationContainer>
+      </FeedProvider>
     </JobProvider>
   );
 }

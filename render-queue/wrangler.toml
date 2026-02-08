@@ -12,5 +12,7 @@ database_name = "splat-jobs"
 database_id = "62434e9d-5628-4378-b198-9050dbf870ee"
 
 # Set via `wrangler secret put WORKER_API_KEY`
-# [vars]
 # WORKER_API_KEY = "..." # Do NOT put secrets here; use `wrangler secret`
+
+[vars]
+R2_PUBLIC_URL = "https://pub-f14229f336774e09b57957613122b58b.r2.dev"
