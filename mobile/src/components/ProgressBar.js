@@ -1,6 +1,9 @@
 import React, { useEffect, useRef } from 'react';
 import { View, Text, StyleSheet, Animated } from 'react-native';
+import Svg, { Circle } from 'react-native-svg';
 import { useJob } from '../context/JobContext';
+
+const AnimatedCircle = Animated.createAnimatedComponent(Circle);
 
 const STAGE_WEIGHTS = {
   frame_extraction: 0.05,
@@ -16,6 +19,11 @@ const STAGE_LABELS = {
   conversion: 'Converting output',
 };
 
+const RING_SIZE = 40;
+const STROKE_WIDTH = 4;
+const RADIUS = (RING_SIZE - STROKE_WIDTH) / 2;
+const CIRCUMFERENCE = 2 * Math.PI * RADIUS;
+
 function computeProgress(stages) {
   if (!stages || stages.length === 0) return 0;
 
@@ -25,7 +33,6 @@ function computeProgress(stages) {
     if (stage.status === 'completed') {
       progress += weight;
     } else if (stage.status === 'running') {
-      // For training, parse "step X/Y" for sub-progress
       if (stage.name === 'training' && stage.detail) {
         const match = stage.detail.match(/step (\d+)\/(\d+)/);
         if (match) {
@@ -35,7 +42,7 @@ function computeProgress(stages) {
           continue;
         }
       }
-      progress += weight * 0.1; // 10% progress for "running" without detail
+      progress += weight * 0.1;
     }
   }
   return Math.min(progress, 1);
@@ -48,7 +55,7 @@ function getCurrentStage(stages) {
 
 export default function ProgressBar() {
   const { activeJobId, jobStatus } = useJob();
-  const animatedWidth = useRef(new Animated.Value(0)).current;
+  const animatedProgress = useRef(new Animated.Value(0)).current;
   const fadeAnim = useRef(new Animated.Value(1)).current;
   const fadeTimeout = useRef(null);
 
@@ -58,14 +65,13 @@ export default function ProgressBar() {
   const isFailed = jobStatus?.status === 'failed';
 
   useEffect(() => {
-    Animated.timing(animatedWidth, {
+    Animated.timing(animatedProgress, {
       toValue: progress,
       duration: 300,
       useNativeDriver: false,
     }).start();
   }, [progress]);
 
-  // Fade out after completion
   useEffect(() => {
     if (isCompleted) {
       fadeTimeout.current = setTimeout(() => {
@@ -95,33 +101,55 @@ export default function ProgressBar() {
 
   const detailText = currentStage?.detail || '';
 
+  const animatedDashOffset = animatedProgress.interpolate({
+    inputRange: [0, 1],
+    outputRange: [CIRCUMFERENCE, 0],
+  });
+
+  const percentText = Math.round(progress * 100) + '%';
+
   return (
     <Animated.View
       style={[styles.container, { opacity: fadeAnim }]}
       pointerEvents="box-none"
     >
       <View style={styles.pill}>
-        <Text style={styles.stageText} numberOfLines={1}>
-          {stageLabel}
-        </Text>
-        {!!detailText && !isCompleted && (
-          <Text style={styles.detailText} numberOfLines={1}>
-            {detailText}
+        <View style={styles.ringContainer}>
+          <Svg width={RING_SIZE} height={RING_SIZE}>
+            <Circle
+              cx={RING_SIZE / 2}
+              cy={RING_SIZE / 2}
+              r={RADIUS}
+              stroke="rgba(255, 255, 255, 0.15)"
+              strokeWidth={STROKE_WIDTH}
+              fill="none"
+            />
+            <AnimatedCircle
+              cx={RING_SIZE / 2}
+              cy={RING_SIZE / 2}
+              r={RADIUS}
+              stroke={barColor}
+              strokeWidth={STROKE_WIDTH}
+              fill="none"
+              strokeDasharray={CIRCUMFERENCE}
+              strokeDashoffset={animatedDashOffset}
+              strokeLinecap="round"
+              transform={`rotate(-90 ${RING_SIZE / 2} ${RING_SIZE / 2})`}
+            />
+          </Svg>
+          <View style={styles.percentOverlay}>
+            <Text style={styles.percentText}>{percentText}</Text>
+          </View>
+        </View>
+        <View style={styles.textContainer}>
+          <Text style={styles.stageText} numberOfLines={1}>
+            {stageLabel}
           </Text>
-        )}
-        <View style={styles.barBg}>
-          <Animated.View
-            style={[
-              styles.barFill,
-              {
-                backgroundColor: barColor,
-                width: animatedWidth.interpolate({
-                  inputRange: [0, 1],
-                  outputRange: ['0%', '100%'],
-                }),
-              },
-            ]}
-          />
+          {!!detailText && !isCompleted && (
+            <Text style={styles.detailText} numberOfLines={1}>
+              {detailText}
+            </Text>
+          )}
         </View>
       </View>
     </Animated.View>
@@ -138,30 +166,41 @@ const styles = StyleSheet.create({
   },
   pill: {
     backgroundColor: 'rgba(20, 20, 40, 0.9)',
-    borderRadius: 12,
-    padding: 12,
-    paddingBottom: 10,
+    borderRadius: 16,
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  ringContainer: {
+    width: RING_SIZE,
+    height: RING_SIZE,
+    marginRight: 12,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  percentOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  percentText: {
+    color: '#fff',
+    fontSize: 10,
+    fontWeight: '700',
+  },
+  textContainer: {
+    flex: 1,
+    justifyContent: 'center',
   },
   stageText: {
     color: '#fff',
-    fontSize: 14,
+    fontSize: 15,
     fontWeight: '600',
-    marginBottom: 2,
   },
   detailText: {
     color: '#aaa',
     fontSize: 12,
-    marginBottom: 4,
-  },
-  barBg: {
-    height: 6,
-    backgroundColor: 'rgba(255, 255, 255, 0.15)',
-    borderRadius: 3,
-    marginTop: 4,
-    overflow: 'hidden',
-  },
-  barFill: {
-    height: '100%',
-    borderRadius: 3,
+    marginTop: 2,
   },
 });

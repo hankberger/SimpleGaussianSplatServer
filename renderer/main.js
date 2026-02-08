@@ -1032,6 +1032,15 @@ async function main() {
     );
 
     let startX, startY, down;
+
+    // Touch inertia state
+    let touchVelocityX = 0;
+    let touchVelocityY = 0;
+    const INERTIA_DECAY = 0.90;
+    const INERTIA_THRESHOLD = 0.0001;
+    const DEAD_ZONE = 2; // pixels
+    let touchMode = 0; // 0 = none, 1 = single-finger orbit, 2 = two-finger pinch/pan
+
     canvas.addEventListener("mousedown", (e) => {
         carousel = false;
         e.preventDefault();
@@ -1096,18 +1105,21 @@ async function main() {
         "touchstart",
         (e) => {
             e.preventDefault();
+            carousel = false;
+            // Kill any existing inertia when user touches screen
+            touchVelocityX = 0;
+            touchVelocityY = 0;
             if (e.touches.length === 1) {
-                carousel = false;
                 startX = e.touches[0].clientX;
                 startY = e.touches[0].clientY;
+                touchMode = 1;
                 down = 1;
             } else if (e.touches.length === 2) {
-                // console.log('beep')
-                carousel = false;
                 startX = e.touches[0].clientX;
                 altX = e.touches[1].clientX;
                 startY = e.touches[0].clientY;
                 altY = e.touches[1].clientY;
+                touchMode = 2;
                 down = 1;
             }
         },
@@ -1117,15 +1129,23 @@ async function main() {
         "touchmove",
         (e) => {
             e.preventDefault();
-            if (e.touches.length === 1 && down) {
+            if (e.touches.length === 1 && touchMode === 1 && down) {
+                let rawDx = e.touches[0].clientX - startX;
+                let rawDy = e.touches[0].clientY - startY;
+
+                // Dead zone filtering
+                if (Math.abs(rawDx) + Math.abs(rawDy) < DEAD_ZONE) return;
+
                 let inv = invert4(viewMatrix);
-                let dx = (4 * (e.touches[0].clientX - startX)) / innerWidth;
-                let dy = (4 * (e.touches[0].clientY - startY)) / innerHeight;
+                let dx = (5 * rawDx) / innerWidth;
+                let dy = (5 * rawDy) / innerHeight;
+
+                // Track velocity for inertia
+                touchVelocityX = dx;
+                touchVelocityY = dy;
 
                 let d = 4;
                 inv = translate4(inv, 0, 0, d);
-                // inv = translate4(inv,  -x, -y, -z);
-                // inv = translate4(inv,  x, y, z);
                 inv = rotate4(inv, dx, 0, 1, 0);
                 inv = rotate4(inv, -dy, 1, 0, 0);
                 inv = translate4(inv, 0, 0, -d);
@@ -1134,20 +1154,22 @@ async function main() {
 
                 startX = e.touches[0].clientX;
                 startY = e.touches[0].clientY;
-            } else if (e.touches.length === 2) {
-                // alert('beep')
+            } else if (e.touches.length === 2 && touchMode === 2) {
                 const dtheta =
                     Math.atan2(startY - altY, startX - altX) -
                     Math.atan2(
                         e.touches[0].clientY - e.touches[1].clientY,
                         e.touches[0].clientX - e.touches[1].clientX,
                     );
-                const dscale =
+                let dscale =
                     Math.hypot(startX - altX, startY - altY) /
                     Math.hypot(
                         e.touches[0].clientX - e.touches[1].clientX,
                         e.touches[0].clientY - e.touches[1].clientY,
                     );
+                // Clamp dscale to prevent jumpy zooms
+                dscale = Math.max(0.9, Math.min(1.1, dscale));
+
                 const dx =
                     (e.touches[0].clientX +
                         e.touches[1].clientX -
@@ -1159,14 +1181,12 @@ async function main() {
                         (startY + altY)) /
                     2;
                 let inv = invert4(viewMatrix);
-                // inv = translate4(inv,  0, 0, d);
                 inv = rotate4(inv, dtheta, 0, 0, 1);
 
-                inv = translate4(inv, -dx / innerWidth, -dy / innerHeight, 0);
+                // Boosted pan multiplier for responsiveness
+                inv = translate4(inv, (-3 * dx) / innerWidth, (-3 * dy) / innerHeight, 0);
 
-                // let preY = inv[13];
                 inv = translate4(inv, 0, 0, 3 * (1 - dscale));
-                // inv[13] = preY;
 
                 viewMatrix = invert4(inv);
 
@@ -1182,9 +1202,26 @@ async function main() {
         "touchend",
         (e) => {
             e.preventDefault();
-            down = false;
-            startX = 0;
-            startY = 0;
+            if (e.touches.length === 0) {
+                // All fingers lifted — enable inertia if we were orbiting
+                if (touchMode === 1) {
+                    // touchVelocityX/Y already set from last touchmove
+                } else {
+                    touchVelocityX = 0;
+                    touchVelocityY = 0;
+                }
+                down = false;
+                touchMode = 0;
+                startX = 0;
+                startY = 0;
+            } else if (e.touches.length === 1) {
+                // Lifted one finger from a pinch — transition to single-finger orbit
+                touchMode = 1;
+                startX = e.touches[0].clientX;
+                startY = e.touches[0].clientY;
+                touchVelocityX = 0;
+                touchVelocityY = 0;
+            }
         },
         { passive: false },
     );
@@ -1210,6 +1247,20 @@ async function main() {
 
     const frame = (now) => {
         let inv = invert4(viewMatrix);
+
+        // Apply touch inertia (momentum after finger lift)
+        if (Math.abs(touchVelocityX) > INERTIA_THRESHOLD || Math.abs(touchVelocityY) > INERTIA_THRESHOLD) {
+            let d = 4;
+            inv = translate4(inv, 0, 0, d);
+            inv = rotate4(inv, touchVelocityX, 0, 1, 0);
+            inv = rotate4(inv, -touchVelocityY, 1, 0, 0);
+            inv = translate4(inv, 0, 0, -d);
+            touchVelocityX *= INERTIA_DECAY;
+            touchVelocityY *= INERTIA_DECAY;
+            if (Math.abs(touchVelocityX) <= INERTIA_THRESHOLD) touchVelocityX = 0;
+            if (Math.abs(touchVelocityY) <= INERTIA_THRESHOLD) touchVelocityY = 0;
+        }
+
         let shiftKey =
             activeKeys.includes("Shift") ||
             activeKeys.includes("ShiftLeft") ||
