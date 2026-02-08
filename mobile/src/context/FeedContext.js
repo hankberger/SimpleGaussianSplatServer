@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useState, useCallback, useRef } from 'react';
-import { getFeed, trackView, likeSplat } from '../services/api';
+import { getFeed, trackView, likeSplat, unlikeSplat } from '../services/api';
 
 const FeedContext = createContext(null);
 
@@ -12,7 +12,6 @@ export function FeedProvider({ children }) {
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
-  const [likedIds, setLikedIds] = useState(new Set());
   const dwellTimer = useRef(null);
   const trackedIds = useRef(new Set());
 
@@ -63,17 +62,56 @@ export function FeedProvider({ children }) {
     setCurrentIndex((prev) => Math.max(0, prev - 1));
   }, []);
 
-  const toggleLike = useCallback((jobId) => {
-    if (likedIds.has(jobId)) return;
-    setLikedIds((prev) => new Set(prev).add(jobId));
-    // Optimistically increment the like count in local state
+  const toggleLike = useCallback(async (jobId, isAuthenticated) => {
+    if (!isAuthenticated) {
+      return { needsAuth: true };
+    }
+
+    const item = items.find((i) => i.job_id === jobId);
+    if (!item) return {};
+
+    const wasLiked = item.liked_by_me;
+
+    // Optimistic update
     setItems((prev) =>
-      prev.map((item) =>
-        item.job_id === jobId ? { ...item, like_count: (item.like_count || 0) + 1 } : item
+      prev.map((i) =>
+        i.job_id === jobId
+          ? {
+              ...i,
+              liked_by_me: !wasLiked,
+              like_count: wasLiked
+                ? Math.max(0, (i.like_count || 0) - 1)
+                : (i.like_count || 0) + 1,
+            }
+          : i
       )
     );
-    likeSplat(jobId);
-  }, [likedIds]);
+
+    try {
+      if (wasLiked) {
+        await unlikeSplat(jobId);
+      } else {
+        await likeSplat(jobId);
+      }
+    } catch {
+      // Rollback on failure
+      setItems((prev) =>
+        prev.map((i) =>
+          i.job_id === jobId
+            ? {
+                ...i,
+                liked_by_me: wasLiked,
+                like_count: wasLiked
+                  ? (i.like_count || 0) + 1
+                  : Math.max(0, (i.like_count || 0) - 1),
+              }
+            : i
+        )
+      );
+    }
+
+    return {};
+  }, [items]);
 
   const currentItem = items[currentIndex] || null;
 
@@ -91,7 +129,6 @@ export function FeedProvider({ children }) {
         goPrevious,
         startDwellTimer,
         toggleLike,
-        likedIds,
       }}
     >
       {children}

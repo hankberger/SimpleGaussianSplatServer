@@ -3,6 +3,14 @@ export interface Env {
   DB: D1Database;
   WORKER_API_KEY: string;
   R2_PUBLIC_URL: string;
+  JWT_SECRET: string;
+  GOOGLE_CLIENT_ID: string;
+  APPLE_BUNDLE_ID: string;
+}
+
+export interface AppVariables {
+  userId: string;
+  userEmail: string;
 }
 
 export type JobStatus = "queued" | "claimed" | "processing" | "completed" | "failed";
@@ -58,6 +66,58 @@ export interface FeedItem {
   view_count: number;
   like_count: number;
   splat_url: string;
+  liked_by_me: boolean;
+}
+
+export interface UserRow {
+  id: string;
+  email: string;
+  password_hash: string | null;
+  salt: string | null;
+  provider: string;
+  provider_id: string | null;
+  display_name: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface LikeRow {
+  user_id: string;
+  job_id: string;
+  created_at: string;
+}
+
+export interface AuthPayload {
+  sub: string;
+  email: string;
+  exp: number;
+}
+
+export interface RegisterRequest {
+  email: string;
+  password: string;
+  display_name?: string;
+}
+
+export interface LoginRequest {
+  email: string;
+  password: string;
+}
+
+export interface OAuthRequest {
+  provider: "google" | "apple";
+  id_token: string;
+  display_name?: string;
+}
+
+export interface AuthResponse {
+  token: string;
+  user: {
+    id: string;
+    email: string;
+    display_name: string | null;
+    provider: string;
+  };
 }
 
 export interface FeedResponse {

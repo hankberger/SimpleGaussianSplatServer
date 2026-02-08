@@ -1,15 +1,18 @@
 import React, { useRef, useMemo, useCallback, useEffect } from 'react';
 import { View, Text, TouchableOpacity, ActivityIndicator, StyleSheet } from 'react-native';
 import { WebView } from 'react-native-webview';
-import { useFocusEffect } from '@react-navigation/native';
+import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import { RENDERER_URL } from '../config';
 import { useJob } from '../context/JobContext';
 import { useFeed } from '../context/FeedContext';
+import { useAuth } from '../context/AuthContext';
 import ProgressBar from '../components/ProgressBar';
 
 export default function ViewerScreen() {
   const webViewRef = useRef(null);
+  const navigation = useNavigation();
   const { activeJobId, jobStatus } = useJob();
+  const { isAuthenticated } = useAuth();
   const {
     currentItem,
     currentIndex,
@@ -22,7 +25,6 @@ export default function ViewerScreen() {
     goPrevious,
     startDwellTimer,
     toggleLike,
-    likedIds,
   } = useFeed();
 
   // Refresh feed when tab gains focus
@@ -51,9 +53,17 @@ export default function ViewerScreen() {
     return null;
   }, [activeJobId, jobStatus?.status, currentItem]);
 
+  const handleLike = useCallback(async () => {
+    if (!currentItem) return;
+    const result = await toggleLike(currentItem.job_id, isAuthenticated);
+    if (result?.needsAuth) {
+      navigation.navigate('Profile');
+    }
+  }, [currentItem, toggleLike, isAuthenticated, navigation]);
+
   const hasPrevious = currentIndex > 0;
   const hasNext = currentIndex < items.length - 1;
-  const isLiked = currentItem ? likedIds.has(currentItem.job_id) : false;
+  const isLiked = currentItem?.liked_by_me ?? false;
 
   if (loading && items.length === 0) {
     return (
@@ -116,9 +126,8 @@ export default function ViewerScreen() {
             <View style={styles.centerSection} pointerEvents="box-none">
               <TouchableOpacity
                 style={styles.likeButton}
-                onPress={() => currentItem && toggleLike(currentItem.job_id)}
-                disabled={isLiked}
-                activeOpacity={isLiked ? 1 : 0.6}
+                onPress={handleLike}
+                activeOpacity={0.6}
               >
                 <Text style={[styles.heartIcon, isLiked && styles.heartIconLiked]}>
                   {isLiked ? '\u2665' : '\u2661'}

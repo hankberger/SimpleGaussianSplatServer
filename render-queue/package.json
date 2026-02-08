@@ -10,7 +10,11 @@
     "migrate:local:v2": "wrangler d1 execute splat-jobs --local --file=migrations/0002_add_feed_columns.sql",
     "migrate:remote:v2": "wrangler d1 execute splat-jobs --remote --file=migrations/0002_add_feed_columns.sql",
     "migrate:local:v3": "wrangler d1 execute splat-jobs --local --file=migrations/0003_add_like_count.sql",
-    "migrate:remote:v3": "wrangler d1 execute splat-jobs --remote --file=migrations/0003_add_like_count.sql"
+    "migrate:remote:v3": "wrangler d1 execute splat-jobs --remote --file=migrations/0003_add_like_count.sql",
+    "migrate:local:v4": "wrangler d1 execute splat-jobs --local --file=migrations/0004_create_users.sql",
+    "migrate:remote:v4": "wrangler d1 execute splat-jobs --remote --file=migrations/0004_create_users.sql",
+    "migrate:local:v5": "wrangler d1 execute splat-jobs --local --file=migrations/0005_create_likes.sql",
+    "migrate:remote:v5": "wrangler d1 execute splat-jobs --remote --file=migrations/0005_create_likes.sql"
   },
   "dependencies": {
     "hono": "^4.4.0"

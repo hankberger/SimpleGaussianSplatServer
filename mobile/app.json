@@ -2,6 +2,7 @@
   "expo": {
     "name": "SplatApp",
     "slug": "mobile",
+    "scheme": "splatapp",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
@@ -43,7 +44,9 @@
         {
           "photosPermission": "Allow SplatApp to access your photo library to select videos for 3D splat generation."
         }
-      ]
+      ],
+      "expo-secure-store",
+      "expo-apple-authentication"
     ]
   }
 }
