@@ -25,7 +25,7 @@ if [ ! -d "dust3r" ]; then
     git clone --recursive https://github.com/naver/dust3r.git
 fi
 cd dust3r
-pip install -e .
+pip install -r requirements.txt
 
 # Build CroCo CUDA kernels (optional, improves speed)
 echo "=== Building CroCo CUDA kernels ==="
@@ -57,7 +57,7 @@ python -c "import torch; print(f'GPU: {torch.cuda.get_device_name(0)}')" 2>/dev/
 
 # Verify DUSt3R
 echo "=== Verifying DUSt3R ==="
-python -c "from dust3r.model import AsymmetricCroCo3DStereo; print('DUSt3R import OK')"
+PYTHONPATH="$(pwd)/dust3r:$PYTHONPATH" python -c "from dust3r.model import AsymmetricCroCo3DStereo; print('DUSt3R import OK')"
 
 # Verify gsplat
 echo "=== Verifying gsplat ==="

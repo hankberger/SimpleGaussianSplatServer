@@ -19,6 +19,8 @@ Video-to-Gaussian-Splat pipeline with a WebGL viewer. Upload a video, get back a
 git clone https://github.com/hankberger/SimpleGaussianSplatServer.git
 cd SimpleGaussianSplatServer
 bash setup_env.sh
+conda activate splatapp
+uvicorn server.app:app --host 0.0.0.0 --port 8000
 ```
 
 ### Option B: Manual setup
@@ -126,12 +128,12 @@ curl -X POST http://localhost:8000/api/v1/jobs \
 
 Optional parameters:
 
-| Parameter              | Default | Range       | Description                          |
-|------------------------|---------|-------------|--------------------------------------|
-| `output_format`        | `splat` | splat, ply  | Output file format                   |
-| `max_frames`           | `40`    | 8-80        | Max frames extracted from video      |
-| `training_iterations`  | `7000`  | 1000-30000  | gsplat training steps                |
-| `resolution`           | `768`   | 256-1920    | Training image resolution (long edge)|
+| Parameter             | Default | Range      | Description                           |
+| --------------------- | ------- | ---------- | ------------------------------------- |
+| `output_format`       | `splat` | splat, ply | Output file format                    |
+| `max_frames`          | `40`    | 8-80       | Max frames extracted from video       |
+| `training_iterations` | `7000`  | 1000-30000 | gsplat training steps                 |
+| `resolution`          | `768`   | 256-1920   | Training image resolution (long edge) |
 
 Example with custom settings:
 
@@ -169,13 +171,13 @@ Or drag and drop the `.splat` file directly onto the renderer page.
 
 ## API Reference
 
-| Endpoint                          | Method | Description            |
-|-----------------------------------|--------|------------------------|
-| `/api/v1/health`                  | GET    | Server & GPU status    |
-| `/api/v1/jobs`                    | POST   | Submit a video         |
-| `/api/v1/jobs/<job_id>`           | GET    | Check job status       |
-| `/api/v1/jobs/<job_id>/result`    | GET    | Download result file   |
-| `/api/v1/jobs/<job_id>`           | DELETE | Delete a job           |
+| Endpoint                       | Method | Description          |
+| ------------------------------ | ------ | -------------------- |
+| `/api/v1/health`               | GET    | Server & GPU status  |
+| `/api/v1/jobs`                 | POST   | Submit a video       |
+| `/api/v1/jobs/<job_id>`        | GET    | Check job status     |
+| `/api/v1/jobs/<job_id>/result` | GET    | Download result file |
+| `/api/v1/jobs/<job_id>`        | DELETE | Delete a job         |
 
 ## Pipeline
 
