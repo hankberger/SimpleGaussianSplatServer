@@ -1523,10 +1523,10 @@ async function main() {
         if (carousel) {
             let inv = invert4(defaultViewMatrix);
 
-            const t = Math.sin((Date.now() - start) / 5000);
+            const t = Math.sin((Date.now() - start) / 10000);
             const r = sceneRadius;
-            inv = translate4(inv, 0.6 * r * t, 0, 1.5 * r * (1 - Math.cos(t)));
-            inv = rotate4(inv, -0.6 * t, 0, 1, 0);
+            inv = translate4(inv, 0.08 * r * t, 0, 0.15 * r * (1 - Math.cos(t)));
+            inv = rotate4(inv, -0.08 * t, 0, 1, 0);
 
             viewMatrix = invert4(inv);
         }
