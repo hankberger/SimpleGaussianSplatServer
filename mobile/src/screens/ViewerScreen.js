@@ -192,11 +192,11 @@ export default function ViewerScreen() {
   /* ---- detail WebView URL ---- */
   const detailWebViewUrl = useMemo(() => {
     if (mode !== 'detail') return null;
-    if (activeJobId && jobStatus?.status === 'completed') {
-      return `${RENDERER_URL}?url=/jobs/${activeJobId}/output.splat&feed=1`;
-    }
     if (currentItem) {
       return `${RENDERER_URL}?url=${encodeURIComponent(currentItem.splat_url)}&feed=1`;
+    }
+    if (activeJobId && jobStatus?.status === 'completed') {
+      return `${RENDERER_URL}?url=/jobs/${activeJobId}/output.splat&feed=1`;
     }
     return null;
   }, [mode, activeJobId, jobStatus?.status, currentItem]);
@@ -382,6 +382,8 @@ export default function ViewerScreen() {
           <Text style={styles.feedTitle}>Explore</Text>
         </View>
 
+        <ProgressBar />
+
         <FlatList
           data={items}
           renderItem={renderCard}
@@ -446,7 +448,6 @@ export default function ViewerScreen() {
 
           {/* Overlay UI */}
           <View style={styles.detailUI} pointerEvents="box-none">
-            <ProgressBar />
 
             {/* Close button (top-left) */}
             <TouchableOpacity
