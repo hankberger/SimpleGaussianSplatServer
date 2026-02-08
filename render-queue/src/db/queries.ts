@@ -147,3 +147,17 @@ export async function incrementViewCount(
     .run();
   return result.meta.changes > 0;
 }
+
+export async function incrementLikeCount(
+  db: D1Database,
+  id: string
+): Promise<boolean> {
+  const result = await db
+    .prepare(
+      `UPDATE jobs SET like_count = like_count + 1
+       WHERE id = ? AND status = 'completed'`
+    )
+    .bind(id)
+    .run();
+  return result.meta.changes > 0;
+}

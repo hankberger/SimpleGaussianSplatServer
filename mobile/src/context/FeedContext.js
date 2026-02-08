@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useState, useCallback, useRef } from 'react';
-import { getFeed, trackView } from '../services/api';
+import { getFeed, trackView, likeSplat } from '../services/api';
 
 const FeedContext = createContext(null);
 
@@ -12,6 +12,7 @@ export function FeedProvider({ children }) {
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
+  const [likedIds, setLikedIds] = useState(new Set());
   const dwellTimer = useRef(null);
   const trackedIds = useRef(new Set());
 
@@ -62,6 +63,18 @@ export function FeedProvider({ children }) {
     setCurrentIndex((prev) => Math.max(0, prev - 1));
   }, []);
 
+  const toggleLike = useCallback((jobId) => {
+    if (likedIds.has(jobId)) return;
+    setLikedIds((prev) => new Set(prev).add(jobId));
+    // Optimistically increment the like count in local state
+    setItems((prev) =>
+      prev.map((item) =>
+        item.job_id === jobId ? { ...item, like_count: (item.like_count || 0) + 1 } : item
+      )
+    );
+    likeSplat(jobId);
+  }, [likedIds]);
+
   const currentItem = items[currentIndex] || null;
 
   return (
@@ -77,6 +90,8 @@ export function FeedProvider({ children }) {
         goNext,
         goPrevious,
         startDwellTimer,
+        toggleLike,
+        likedIds,
       }}
     >
       {children}

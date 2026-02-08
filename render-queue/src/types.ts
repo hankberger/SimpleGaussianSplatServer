@@ -27,6 +27,7 @@ export interface JobRow {
   stages: string; // JSON array of StageProgress
   error: string | null;
   view_count: number;
+  like_count: number;
 }
 
 export interface JobConfig {
@@ -55,6 +56,7 @@ export interface FeedItem {
   job_id: string;
   created_at: string;
   view_count: number;
+  like_count: number;
   splat_url: string;
 }
 

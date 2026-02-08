@@ -21,6 +21,8 @@ export default function ViewerScreen() {
     goNext,
     goPrevious,
     startDwellTimer,
+    toggleLike,
+    likedIds,
   } = useFeed();
 
   // Refresh feed when tab gains focus
@@ -51,6 +53,7 @@ export default function ViewerScreen() {
 
   const hasPrevious = currentIndex > 0;
   const hasNext = currentIndex < items.length - 1;
+  const isLiked = currentItem ? likedIds.has(currentItem.job_id) : false;
 
   if (loading && items.length === 0) {
     return (
@@ -97,42 +100,52 @@ export default function ViewerScreen() {
       />
       <View style={styles.overlay} pointerEvents="box-none">
         <ProgressBar />
-      </View>
 
-      {items.length > 0 && (
-        <View style={styles.navBar}>
-          <TouchableOpacity
-            style={[styles.navButton, !hasPrevious && styles.navButtonDisabled]}
-            onPress={goPrevious}
-            disabled={!hasPrevious}
-          >
-            <Text style={[styles.navButtonText, !hasPrevious && styles.navButtonTextDisabled]}>
-              Prev
-            </Text>
-          </TouchableOpacity>
-
-          <View style={styles.navInfo}>
-            <Text style={styles.navCounter} numberOfLines={1}>
-              {currentIndex + 1} / {total}
-            </Text>
-            {currentItem && (
-              <Text style={styles.navViews} numberOfLines={1}>
-                {currentItem.view_count} {currentItem.view_count === 1 ? 'view' : 'views'}
+        {items.length > 0 && (
+          <View style={styles.navBar} pointerEvents="box-none">
+            <TouchableOpacity
+              style={[styles.arrowButton, !hasPrevious && styles.arrowButtonDisabled]}
+              onPress={goPrevious}
+              disabled={!hasPrevious}
+            >
+              <Text style={[styles.arrowText, !hasPrevious && styles.arrowTextDisabled]}>
+                {'\u2039'}
               </Text>
-            )}
-          </View>
+            </TouchableOpacity>
 
-          <TouchableOpacity
-            style={[styles.navButton, !hasNext && styles.navButtonDisabled]}
-            onPress={goNext}
-            disabled={!hasNext}
-          >
-            <Text style={[styles.navButtonText, !hasNext && styles.navButtonTextDisabled]}>
-              Next
-            </Text>
-          </TouchableOpacity>
-        </View>
-      )}
+            <View style={styles.centerSection} pointerEvents="box-none">
+              <TouchableOpacity
+                style={styles.likeButton}
+                onPress={() => currentItem && toggleLike(currentItem.job_id)}
+                disabled={isLiked}
+                activeOpacity={isLiked ? 1 : 0.6}
+              >
+                <Text style={[styles.heartIcon, isLiked && styles.heartIconLiked]}>
+                  {isLiked ? '\u2665' : '\u2661'}
+                </Text>
+                <Text style={[styles.likeCount, isLiked && styles.likeCountLiked]}>
+                  {currentItem?.like_count || 0}
+                </Text>
+              </TouchableOpacity>
+              {currentItem && (
+                <Text style={styles.viewCount}>
+                  {currentItem.view_count} {currentItem.view_count === 1 ? 'view' : 'views'}
+                </Text>
+              )}
+            </View>
+
+            <TouchableOpacity
+              style={[styles.arrowButton, !hasNext && styles.arrowButtonDisabled]}
+              onPress={goNext}
+              disabled={!hasNext}
+            >
+              <Text style={[styles.arrowText, !hasNext && styles.arrowTextDisabled]}>
+                {'\u203A'}
+              </Text>
+            </TouchableOpacity>
+          </View>
+        )}
+      </View>
     </View>
   );
 }
@@ -188,43 +201,65 @@ const styles = StyleSheet.create({
     marginTop: 8,
   },
   navBar: {
+    position: 'absolute',
+    bottom: 16,
+    left: 16,
+    right: 16,
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: 'rgba(11, 15, 26, 0.95)',
-    paddingVertical: 12,
-    paddingHorizontal: 16,
-    borderTopWidth: 1,
-    borderTopColor: '#1e293b',
   },
-  navButton: {
-    backgroundColor: '#1e293b',
-    paddingHorizontal: 20,
-    paddingVertical: 10,
-    borderRadius: 8,
-  },
-  navButtonDisabled: {
-    opacity: 0.3,
-  },
-  navButtonText: {
-    color: '#f1f5f9',
-    fontSize: 15,
-    fontWeight: '600',
-  },
-  navButtonTextDisabled: {
-    color: '#475569',
-  },
-  navInfo: {
-    flex: 1,
+  arrowButton: {
+    width: 48,
+    height: 48,
+    borderRadius: 10,
+    backgroundColor: 'rgba(11, 15, 26, 0.85)',
+    justifyContent: 'center',
     alignItems: 'center',
   },
-  navCounter: {
-    color: '#f1f5f9',
-    fontSize: 15,
-    fontWeight: '600',
+  arrowButtonDisabled: {
+    opacity: 0.25,
   },
-  navViews: {
+  arrowText: {
+    color: '#f1f5f9',
+    fontSize: 28,
+    fontWeight: '300',
+    marginTop: -2,
+  },
+  arrowTextDisabled: {
+    color: '#475569',
+  },
+  centerSection: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  likeButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: 20,
+    backgroundColor: 'rgba(11, 15, 26, 0.85)',
+  },
+  heartIcon: {
+    fontSize: 22,
+    color: '#94a3b8',
+    marginRight: 6,
+  },
+  heartIconLiked: {
+    color: '#ef4444',
+  },
+  likeCount: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#f1f5f9',
+  },
+  likeCountLiked: {
+    color: '#ef4444',
+  },
+  viewCount: {
     color: '#64748b',
     fontSize: 12,
-    marginTop: 2,
+    marginTop: 4,
   },
 });

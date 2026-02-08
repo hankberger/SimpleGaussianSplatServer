@@ -69,3 +69,7 @@ export async function trackView(jobId) {
   // Fire-and-forget — don't await or throw on failure
   fetch(`${API_BASE}/api/v1/feed/${jobId}/view`, { method: 'POST' }).catch(() => {});
 }
+
+export async function likeSplat(jobId) {
+  fetch(`${API_BASE}/api/v1/feed/${jobId}/like`, { method: 'POST' }).catch(() => {});
+}

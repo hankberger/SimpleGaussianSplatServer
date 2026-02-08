@@ -8,7 +8,9 @@
     "migrate:local": "wrangler d1 execute splat-jobs --local --file=migrations/0001_create_jobs.sql",
     "migrate:remote": "wrangler d1 execute splat-jobs --remote --file=migrations/0001_create_jobs.sql",
     "migrate:local:v2": "wrangler d1 execute splat-jobs --local --file=migrations/0002_add_feed_columns.sql",
-    "migrate:remote:v2": "wrangler d1 execute splat-jobs --remote --file=migrations/0002_add_feed_columns.sql"
+    "migrate:remote:v2": "wrangler d1 execute splat-jobs --remote --file=migrations/0002_add_feed_columns.sql",
+    "migrate:local:v3": "wrangler d1 execute splat-jobs --local --file=migrations/0003_add_like_count.sql",
+    "migrate:remote:v3": "wrangler d1 execute splat-jobs --remote --file=migrations/0003_add_like_count.sql"
   },
   "dependencies": {
     "hono": "^4.4.0"
