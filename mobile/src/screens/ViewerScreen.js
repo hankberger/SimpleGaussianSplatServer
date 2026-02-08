@@ -1,12 +1,45 @@
-import React, { useRef, useMemo, useCallback, useEffect } from 'react';
-import { View, Text, TouchableOpacity, ActivityIndicator, StyleSheet } from 'react-native';
+import React, { useRef, useMemo, useCallback, useEffect, useState } from 'react';
+import { View, Text, TouchableOpacity, ActivityIndicator, StyleSheet, Animated } from 'react-native';
 import { WebView } from 'react-native-webview';
+import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
+import * as Haptics from 'expo-haptics';
 import { RENDERER_URL } from '../config';
 import { useJob } from '../context/JobContext';
 import { useFeed } from '../context/FeedContext';
 import { useAuth } from '../context/AuthContext';
 import ProgressBar from '../components/ProgressBar';
+
+/* ------------------------------------------------------------------ *
+ *  Injected into the WebView to detect vertical swipes & double-taps *
+ *  Fast vertical fling (< 300 ms, > 80 px, mostly vertical)         *
+ *    → posts { type:'swipe', direction:'up'|'down' }                 *
+ *  Double tap (< 300 ms gap, < 10 px movement)                      *
+ *    → posts { type:'doubleTap' }                                    *
+ * ------------------------------------------------------------------ */
+const INJECTED_JS = `
+(function(){
+  var sy=0,sx=0,st=0,lt=0;
+  document.addEventListener('touchstart',function(e){
+    if(e.touches.length===1){sy=e.touches[0].clientY;sx=e.touches[0].clientX;st=Date.now();}
+  },{passive:true});
+  document.addEventListener('touchend',function(e){
+    if(e.changedTouches.length!==1)return;
+    var dy=e.changedTouches[0].clientY-sy;
+    var dx=e.changedTouches[0].clientX-sx;
+    var dt=Date.now()-st;
+    if(dt<300&&Math.abs(dy)>80&&Math.abs(dy)>Math.abs(dx)*2){
+      window.ReactNativeWebView.postMessage(JSON.stringify({type:'swipe',direction:dy<0?'up':'down'}));
+      return;
+    }
+    var now=Date.now();
+    if(now-lt<300&&dt<200&&Math.abs(dy)<10&&Math.abs(dx)<10){
+      window.ReactNativeWebView.postMessage(JSON.stringify({type:'doubleTap'}));
+      lt=0;
+    }else{lt=now;}
+  },{passive:true});
+})();true;
+`;
 
 export default function ViewerScreen() {
   const webViewRef = useRef(null);
@@ -27,6 +60,14 @@ export default function ViewerScreen() {
     toggleLike,
   } = useFeed();
 
+  /* ---- animations ---- */
+  const fadeAnim = useRef(new Animated.Value(1)).current;
+  const slideAnim = useRef(new Animated.Value(0)).current;
+  const [heartVisible, setHeartVisible] = useState(false);
+  const heartScale = useRef(new Animated.Value(0)).current;
+  const heartOpacity = useRef(new Animated.Value(0)).current;
+  const prevIndex = useRef(currentIndex);
+
   // Refresh feed when tab gains focus
   useFocusEffect(
     useCallback(() => {
@@ -41,29 +82,83 @@ export default function ViewerScreen() {
     }
   }, [currentItem, startDwellTimer]);
 
+  // Slide + fade transition when switching items
+  useEffect(() => {
+    if (prevIndex.current !== currentIndex) {
+      const dir = currentIndex > prevIndex.current ? 1 : -1;
+      Animated.parallel([
+        Animated.timing(fadeAnim, { toValue: 0, duration: 120, useNativeDriver: true }),
+        Animated.timing(slideAnim, { toValue: -dir * 40, duration: 120, useNativeDriver: true }),
+      ]).start(() => {
+        slideAnim.setValue(dir * 24);
+        Animated.parallel([
+          Animated.timing(fadeAnim, { toValue: 1, duration: 180, useNativeDriver: true }),
+          Animated.spring(slideAnim, { toValue: 0, useNativeDriver: true, tension: 80, friction: 12 }),
+        ]).start();
+      });
+      prevIndex.current = currentIndex;
+    }
+  }, [currentIndex, fadeAnim, slideAnim]);
+
+  /* ---- derived URL ---- */
   const webViewUrl = useMemo(() => {
-    // If an active job just completed, show it directly
     if (activeJobId && jobStatus?.status === 'completed') {
       return `${RENDERER_URL}?url=/jobs/${activeJobId}/output.splat&feed=1`;
     }
-    // Otherwise show current feed item
     if (currentItem) {
       return `${RENDERER_URL}?url=${encodeURIComponent(currentItem.splat_url)}&feed=1`;
     }
     return null;
   }, [activeJobId, jobStatus?.status, currentItem]);
 
+  /* ---- actions ---- */
   const handleLike = useCallback(async () => {
     if (!currentItem) return;
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     const result = await toggleLike(currentItem.job_id, isAuthenticated);
     if (result?.needsAuth) {
       navigation.navigate('Profile');
     }
   }, [currentItem, toggleLike, isAuthenticated, navigation]);
 
+  const showHeartAnimation = useCallback(() => {
+    setHeartVisible(true);
+    heartScale.setValue(0);
+    heartOpacity.setValue(1);
+    Animated.sequence([
+      Animated.spring(heartScale, { toValue: 1, useNativeDriver: true, tension: 100, friction: 6 }),
+      Animated.delay(400),
+      Animated.timing(heartOpacity, { toValue: 0, duration: 300, useNativeDriver: true }),
+    ]).start(() => setHeartVisible(false));
+  }, [heartScale, heartOpacity]);
+
+  const handleWebViewMessage = useCallback(
+    (event) => {
+      try {
+        const data = JSON.parse(event.nativeEvent.data);
+        if (data.type === 'swipe') {
+          Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+          if (data.direction === 'up') goNext();
+          else goPrevious();
+        } else if (data.type === 'doubleTap') {
+          if (currentItem && !currentItem.liked_by_me) {
+            handleLike();
+          }
+          showHeartAnimation();
+        }
+      } catch {
+        /* ignore non-JSON messages */
+      }
+    },
+    [goNext, goPrevious, currentItem, handleLike, showHeartAnimation]
+  );
+
+  /* ---- derived state ---- */
+  const isLiked = currentItem?.liked_by_me ?? false;
   const hasPrevious = currentIndex > 0;
   const hasNext = currentIndex < items.length - 1;
-  const isLiked = currentItem?.liked_by_me ?? false;
+
+  /* ============ RENDER ============ */
 
   if (loading && items.length === 0) {
     return (
@@ -96,80 +191,155 @@ export default function ViewerScreen() {
 
   return (
     <View style={styles.container}>
-      <WebView
-        ref={webViewRef}
-        source={{ uri: webViewUrl }}
-        style={styles.webview}
-        javaScriptEnabled
-        domStorageEnabled
-        mixedContentMode="always"
-        androidLayerType="hardware"
-        allowsInlineMediaPlayback
-        mediaPlaybackRequiresUserAction={false}
-        originWhitelist={['*']}
-      />
+      {/* 3D Splat Viewer */}
+      <Animated.View
+        style={[
+          styles.webviewContainer,
+          { opacity: fadeAnim, transform: [{ translateY: slideAnim }] },
+        ]}
+      >
+        <WebView
+          ref={webViewRef}
+          source={{ uri: webViewUrl }}
+          style={styles.webview}
+          javaScriptEnabled
+          domStorageEnabled
+          mixedContentMode="always"
+          androidLayerType="hardware"
+          allowsInlineMediaPlayback
+          mediaPlaybackRequiresUserAction={false}
+          originWhitelist={['*']}
+          injectedJavaScript={INJECTED_JS}
+          onMessage={handleWebViewMessage}
+        />
+      </Animated.View>
+
+      {/* Overlay UI — pointerEvents="box-none" passes touches through */}
       <View style={styles.overlay} pointerEvents="box-none">
         <ProgressBar />
 
+        {/* Position counter (top right) */}
+        {items.length > 1 && (
+          <View style={styles.positionBadge}>
+            <Text style={styles.positionText}>
+              {currentIndex + 1} / {total || items.length}
+            </Text>
+          </View>
+        )}
+
+        {/* Right sidebar — Instagram Reels style */}
         {items.length > 0 && (
-          <View style={styles.navBar} pointerEvents="box-none">
+          <View style={styles.sidebar} pointerEvents="box-none">
+            {/* Like */}
             <TouchableOpacity
-              style={[styles.arrowButton, !hasPrevious && styles.arrowButtonDisabled]}
-              onPress={goPrevious}
-              disabled={!hasPrevious}
+              style={styles.sidebarItem}
+              onPress={handleLike}
+              activeOpacity={0.7}
             >
-              <Text style={[styles.arrowText, !hasPrevious && styles.arrowTextDisabled]}>
-                {'\u2039'}
+              <Ionicons
+                name={isLiked ? 'heart' : 'heart-outline'}
+                size={30}
+                color={isLiked ? '#ef4444' : '#f1f5f9'}
+                style={styles.iconShadow}
+              />
+              <Text style={[styles.sidebarCount, isLiked && styles.countLiked]}>
+                {currentItem?.like_count || 0}
               </Text>
             </TouchableOpacity>
 
-            <View style={styles.centerSection} pointerEvents="box-none">
-              <TouchableOpacity
-                style={styles.likeButton}
-                onPress={handleLike}
-                activeOpacity={0.6}
-              >
-                <Text style={[styles.heartIcon, isLiked && styles.heartIconLiked]}>
-                  {isLiked ? '\u2665' : '\u2661'}
-                </Text>
-                <Text style={[styles.likeCount, isLiked && styles.likeCountLiked]}>
-                  {currentItem?.like_count || 0}
-                </Text>
-              </TouchableOpacity>
-              {currentItem && (
-                <Text style={styles.viewCount}>
-                  {currentItem.view_count} {currentItem.view_count === 1 ? 'view' : 'views'}
-                </Text>
-              )}
+            {/* Views */}
+            <View style={styles.sidebarItem}>
+              <Ionicons
+                name="eye-outline"
+                size={28}
+                color="#f1f5f9"
+                style={styles.iconShadow}
+              />
+              <Text style={styles.sidebarCount}>
+                {currentItem?.view_count || 0}
+              </Text>
             </View>
 
-            <TouchableOpacity
-              style={[styles.arrowButton, !hasNext && styles.arrowButtonDisabled]}
-              onPress={goNext}
-              disabled={!hasNext}
-            >
-              <Text style={[styles.arrowText, !hasNext && styles.arrowTextDisabled]}>
-                {'\u203A'}
-              </Text>
-            </TouchableOpacity>
+            {/* Navigation chevrons */}
+            <View style={styles.navGroup}>
+              <TouchableOpacity
+                style={[styles.navChevron, !hasPrevious && styles.navChevronDisabled]}
+                onPress={() => {
+                  Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                  goPrevious();
+                }}
+                disabled={!hasPrevious}
+                activeOpacity={0.7}
+              >
+                <Ionicons
+                  name="chevron-up"
+                  size={22}
+                  color={hasPrevious ? '#f1f5f9' : '#475569'}
+                />
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.navChevron, !hasNext && styles.navChevronDisabled]}
+                onPress={() => {
+                  Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                  goNext();
+                }}
+                disabled={!hasNext}
+                activeOpacity={0.7}
+              >
+                <Ionicons
+                  name="chevron-down"
+                  size={22}
+                  color={hasNext ? '#f1f5f9' : '#475569'}
+                />
+              </TouchableOpacity>
+            </View>
+          </View>
+        )}
+
+        {/* Swipe hint — shows briefly on first item */}
+        {items.length > 1 && currentIndex === 0 && (
+          <View style={styles.swipeHint} pointerEvents="none">
+            <Ionicons name="chevron-up" size={18} color="#94a3b8" />
+            <Text style={styles.swipeHintText}>Swipe up for more</Text>
           </View>
         )}
       </View>
+
+      {/* Double-tap heart animation */}
+      {heartVisible && (
+        <View style={styles.heartOverlay} pointerEvents="none">
+          <Animated.View
+            style={{
+              opacity: heartOpacity,
+              transform: [{ scale: heartScale }],
+            }}
+          >
+            <Ionicons name="heart" size={90} color="#ef4444" style={styles.heartDrop} />
+          </Animated.View>
+        </View>
+      )}
     </View>
   );
 }
 
+/* ================================================================== */
 const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: '#000',
   },
+  webviewContainer: {
+    flex: 1,
+  },
   webview: {
     flex: 1,
+    backgroundColor: '#000',
   },
   overlay: {
     ...StyleSheet.absoluteFillObject,
   },
+
+  /* -- empty / loading / error states -- */
   centered: {
     flex: 1,
     backgroundColor: '#000',
@@ -209,66 +379,92 @@ const styles = StyleSheet.create({
     fontSize: 14,
     marginTop: 8,
   },
-  navBar: {
+
+  /* -- position badge (top-right) -- */
+  positionBadge: {
     position: 'absolute',
-    bottom: 16,
-    left: 16,
+    top: 58,
     right: 16,
-    flexDirection: 'row',
-    alignItems: 'center',
+    backgroundColor: 'rgba(0,0,0,0.45)',
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 12,
   },
-  arrowButton: {
-    width: 48,
-    height: 48,
-    borderRadius: 10,
-    backgroundColor: 'rgba(11, 15, 26, 0.85)',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  arrowButtonDisabled: {
-    opacity: 0.25,
-  },
-  arrowText: {
+  positionText: {
     color: '#f1f5f9',
-    fontSize: 28,
-    fontWeight: '300',
-    marginTop: -2,
-  },
-  arrowTextDisabled: {
-    color: '#475569',
-  },
-  centerSection: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  likeButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 16,
-    paddingVertical: 8,
-    borderRadius: 20,
-    backgroundColor: 'rgba(11, 15, 26, 0.85)',
-  },
-  heartIcon: {
-    fontSize: 22,
-    color: '#94a3b8',
-    marginRight: 6,
-  },
-  heartIconLiked: {
-    color: '#ef4444',
-  },
-  likeCount: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#f1f5f9',
-  },
-  likeCountLiked: {
-    color: '#ef4444',
-  },
-  viewCount: {
-    color: '#64748b',
     fontSize: 12,
-    marginTop: 4,
+    fontWeight: '600',
+  },
+
+  /* -- right sidebar (Instagram Reels style) -- */
+  sidebar: {
+    position: 'absolute',
+    right: 10,
+    bottom: 32,
+    alignItems: 'center',
+  },
+  sidebarItem: {
+    alignItems: 'center',
+    marginBottom: 22,
+  },
+  iconShadow: {
+    textShadowColor: 'rgba(0,0,0,0.6)',
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 4,
+  },
+  sidebarCount: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#f1f5f9',
+    marginTop: 2,
+    textShadowColor: 'rgba(0,0,0,0.6)',
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 4,
+  },
+  countLiked: {
+    color: '#ef4444',
+  },
+
+  /* -- nav chevrons -- */
+  navGroup: {
+    alignItems: 'center',
+    gap: 2,
+  },
+  navChevron: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    backgroundColor: 'rgba(0,0,0,0.35)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  navChevronDisabled: {
+    opacity: 0.3,
+  },
+
+  /* -- swipe hint -- */
+  swipeHint: {
+    position: 'absolute',
+    bottom: 20,
+    alignSelf: 'center',
+    alignItems: 'center',
+    opacity: 0.6,
+  },
+  swipeHintText: {
+    color: '#94a3b8',
+    fontSize: 12,
+    marginTop: 2,
+  },
+
+  /* -- double-tap heart overlay -- */
+  heartOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  heartDrop: {
+    textShadowColor: 'rgba(0,0,0,0.3)',
+    textShadowOffset: { width: 0, height: 3 },
+    textShadowRadius: 10,
   },
 });

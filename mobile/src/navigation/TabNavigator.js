@@ -22,11 +22,11 @@ export default function TabNavigator() {
       }}
     >
       <Tab.Screen
-        name="Viewer"
+        name="Explore"
         component={ViewerScreen}
         options={{
           tabBarIcon: ({ color, size }) => (
-            <Ionicons name="cube-outline" size={size} color={color} />
+            <Ionicons name="compass-outline" size={size} color={color} />
           ),
         }}
       />

@@ -49,7 +49,7 @@ export function JobProvider({ children, navigationRef }) {
       dispatch({ type: 'UPLOAD_SUCCESS', jobId: result.job_id });
       // Navigate to Viewer tab
       if (navigationRef?.current) {
-        navigationRef.current.navigate('Viewer');
+        navigationRef.current.navigate('Explore');
       }
     } catch (err) {
       dispatch({ type: 'UPLOAD_ERROR', error: err.message });
