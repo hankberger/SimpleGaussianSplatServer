@@ -1015,7 +1015,7 @@ async function main() {
                     inv,
                     0,
                     0,
-                    (-10 * (e.deltaY * scale)) / innerHeight,
+                    (-3 * (e.deltaY * scale)) / innerHeight,
                 );
                 // inv[13] = preY;
             } else {
@@ -1036,7 +1036,7 @@ async function main() {
     // Touch inertia state
     let touchVelocityX = 0;
     let touchVelocityY = 0;
-    const INERTIA_DECAY = 0.90;
+    const INERTIA_DECAY = 0.85;
     const INERTIA_THRESHOLD = 0.0001;
     const DEAD_ZONE = 2; // pixels
     let touchMode = 0; // 0 = none, 1 = single-finger orbit, 2 = two-finger pinch/pan
@@ -1060,8 +1060,8 @@ async function main() {
         e.preventDefault();
         if (down == 1) {
             let inv = invert4(viewMatrix);
-            let dx = (5 * (e.clientX - startX)) / innerWidth;
-            let dy = (5 * (e.clientY - startY)) / innerHeight;
+            let dx = (2 * (e.clientX - startX)) / innerWidth;
+            let dy = (2 * (e.clientY - startY)) / innerHeight;
             let d = 4;
 
             inv = translate4(inv, 0, 0, d);
@@ -1081,9 +1081,9 @@ async function main() {
             // let preY = inv[13];
             inv = translate4(
                 inv,
-                (-10 * (e.clientX - startX)) / innerWidth,
+                (-3 * (e.clientX - startX)) / innerWidth,
                 0,
-                (10 * (e.clientY - startY)) / innerHeight,
+                (3 * (e.clientY - startY)) / innerHeight,
             );
             // inv[13] = preY;
             viewMatrix = invert4(inv);
@@ -1137,8 +1137,8 @@ async function main() {
                 if (Math.abs(rawDx) + Math.abs(rawDy) < DEAD_ZONE) return;
 
                 let inv = invert4(viewMatrix);
-                let dx = (5 * rawDx) / innerWidth;
-                let dy = (5 * rawDy) / innerHeight;
+                let dx = (2 * rawDx) / innerWidth;
+                let dy = (2 * rawDy) / innerHeight;
 
                 // Track velocity for inertia
                 touchVelocityX = dx;
@@ -1184,9 +1184,9 @@ async function main() {
                 inv = rotate4(inv, dtheta, 0, 0, 1);
 
                 // Boosted pan multiplier for responsiveness
-                inv = translate4(inv, (-3 * dx) / innerWidth, (-3 * dy) / innerHeight, 0);
+                inv = translate4(inv, (-1.5 * dx) / innerWidth, (-1.5 * dy) / innerHeight, 0);
 
-                inv = translate4(inv, 0, 0, 3 * (1 - dscale));
+                inv = translate4(inv, 0, 0, 1.5 * (1 - dscale));
 
                 viewMatrix = invert4(inv);
 
