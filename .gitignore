@@ -1,6 +1,7 @@
 # Dependencies
 dust3r/
-renderer/node_modules/
+node_modules/
+package-lock.json
 
 # Job artifacts
 jobs/
