@@ -360,6 +360,7 @@ async def process_remote_job(
         await report_stages()
 
         last_report = [0.0]
+        loop = asyncio.get_event_loop()
 
         def on_progress(step: int, loss: float):
             import time
@@ -373,7 +374,7 @@ async def process_remote_job(
             now = time.time()
             if now - last_report[0] > 5:
                 last_report[0] = now
-                asyncio.get_event_loop().create_task(report_stages())
+                asyncio.run_coroutine_threadsafe(report_stages(), loop)
 
         ply_path = await asyncio.to_thread(
             _run_training, points, colors, poses, intrinsics, frame_paths, config, on_progress
