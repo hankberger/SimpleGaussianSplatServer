@@ -3,7 +3,7 @@ from pydantic_settings import BaseSettings
 
 
 class Settings(BaseSettings):
-    model_config = {"env_prefix": "SPLAT_"}
+    model_config = {"env_prefix": "SPLAT_", "env_file": ".env"}
 
     # Paths
     jobs_dir: Path = Path("jobs")

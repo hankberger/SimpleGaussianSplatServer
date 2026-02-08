@@ -6,9 +6,6 @@ import worker from "./routes/worker";
 
 const app = new Hono<{ Bindings: Env }>();
 
-// TODO: remove this early return once bindings are configured
-app.all("/*", (c) => c.text("hi"));
-
 // CORS for browser clients
 app.use("/*", cors());
 
