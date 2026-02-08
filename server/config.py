@@ -11,7 +11,7 @@ class Settings(BaseSettings):
     ffprobe_path: str = "ffprobe"
 
     # Frame extraction
-    default_max_frames: int = 40
+    default_max_frames: int = 50
     min_frames: int = 8
     default_resolution: int = 768
     dust3r_resolution: int = 512
@@ -27,7 +27,7 @@ class Settings(BaseSettings):
     dust3r_confidence_threshold: float = 1.5
 
     # gsplat training
-    default_training_iterations: int = 7000
+    default_training_iterations: int = 10000
     lr_means: float = 1.6e-4
     lr_means_final: float = 1.6e-6
     lr_scales: float = 5e-3
@@ -35,11 +35,13 @@ class Settings(BaseSettings):
     lr_opacities: float = 5e-2
     lr_sh: float = 2.5e-3
     ssim_weight: float = 0.2
+    sh_degree: int = 3
+    opacity_reset_interval: int = 3000
     densify_start: int = 500
     densify_end: int = 4000
     densify_interval: int = 100
-    densify_grad_thresh: float = 0.0002
-    densify_max_gaussians: int = 500_000
+    densify_grad_thresh: float = 0.00015
+    densify_max_gaussians: int = 1_000_000
     knn_k: int = 4
 
     # Job management

@@ -114,13 +114,13 @@ def train_gaussians(
             .requires_grad_(True)
         )
 
-        # Spherical harmonics (degree 0 only): (color - 0.5) / SH_C0
-        sh0 = (
-            torch.from_numpy((colors - 0.5) / SH_C0)
-            .float()
-            .to(device)
-            .requires_grad_(True)
-        )
+        # Spherical harmonics: degree 0 initialized from point colors,
+        # higher degrees (1-3) initialized to zero for progressive activation
+        sh_degree_max = settings.sh_degree
+        n_sh_bases = (sh_degree_max + 1) ** 2  # 16 for degree 3
+        sh_coeffs = torch.zeros(n_points, n_sh_bases, 3, device=device)
+        sh_coeffs[:, 0, :] = torch.from_numpy((colors - 0.5) / SH_C0).float()
+        sh_coeffs = sh_coeffs.requires_grad_(True)
 
         # Optimizer
         optimizer = torch.optim.Adam(
@@ -129,7 +129,7 @@ def train_gaussians(
                 {"params": [log_scales], "lr": settings.lr_scales, "name": "scales"},
                 {"params": [quats], "lr": settings.lr_quats, "name": "quats"},
                 {"params": [logit_opacities], "lr": settings.lr_opacities, "name": "opacities"},
-                {"params": [sh0], "lr": settings.lr_sh, "name": "sh"},
+                {"params": [sh_coeffs], "lr": settings.lr_sh, "name": "sh"},
             ],
         )
 
@@ -143,6 +143,9 @@ def train_gaussians(
         scene_extent = np.linalg.norm(points.max(axis=0) - points.min(axis=0))
         split_scale_thresh = scene_extent * 0.01
 
+        # Scale densification end proportionally with training length
+        densify_end = max(settings.densify_end, int(max_steps * 0.7))
+
         # LR schedule for means: exponential decay from lr_means to lr_means_final
         lr_means_init = settings.lr_means
         lr_means_final = settings.lr_means_final
@@ -150,6 +153,11 @@ def train_gaussians(
             lr_decay_rate = (lr_means_final / lr_means_init) ** (1.0 / max_steps)
         else:
             lr_decay_rate = 1.0
+
+        # Progressive SH activation schedule (step thresholds for each degree)
+        sh_activation_steps = [0, 1000, 2000, 3000]
+
+        logger.info("Densification will run until step %d (%.0f%% of %d)", densify_end, densify_end / max_steps * 100, max_steps)
 
         # Training loop
         for step in range(max_steps):
@@ -169,10 +177,14 @@ def train_gaussians(
             # Current Gaussian parameters
             opacities = torch.sigmoid(logit_opacities)
             scales = torch.exp(log_scales)
-            colors_sh = sh0 * SH_C0 + 0.5  # Convert SH0 back to RGB
-            colors_rgb = torch.clamp(colors_sh, 0.0, 1.0)
 
-            # Rasterize
+            # Progressive SH degree: activate higher bands as training progresses
+            active_sh_degree = 0
+            for d in range(1, sh_degree_max + 1):
+                if d < len(sh_activation_steps) and step >= sh_activation_steps[d]:
+                    active_sh_degree = d
+
+            # Rasterize with SH coefficients — gsplat computes view-dependent color
             viewmat = w2c[img_idx : img_idx + 1]  # (1, 4, 4)
             K = Ks[img_idx : img_idx + 1]  # (1, 3, 3)
 
@@ -181,13 +193,13 @@ def train_gaussians(
                 quats=quats / (quats.norm(dim=-1, keepdim=True) + 1e-8),
                 scales=scales,
                 opacities=opacities,
-                colors=colors_rgb,
+                colors=sh_coeffs,
                 viewmats=viewmat,
                 Ks=K,
                 width=img_w,
                 height=img_h,
                 packed=False,
-                render_mode="RGB",
+                sh_degree=active_sh_degree,
             )
             # renders: (1, H, W, C) -> (C, H, W)
             rendered = renders[0].permute(2, 0, 1)
@@ -202,7 +214,7 @@ def train_gaussians(
             loss.backward()
 
             # Accumulate gradients for densification
-            if means.grad is not None and settings.densify_start <= step < settings.densify_end:
+            if means.grad is not None and settings.densify_start <= step < densify_end:
                 grad_norms = means.grad.detach().norm(dim=-1)
                 visible = meta.get("gaussian_ids", None)
                 if visible is not None and len(visible) > 0:
@@ -215,18 +227,18 @@ def train_gaussians(
 
             # Densification + pruning
             if (
-                settings.densify_start <= step < settings.densify_end
+                settings.densify_start <= step < densify_end
                 and step % settings.densify_interval == 0
                 and step > settings.densify_start
             ):
                 if len(means) < settings.densify_max_gaussians:
-                    means, log_scales, quats, logit_opacities, sh0, optimizer, grad_accum, grad_count = (
+                    means, log_scales, quats, logit_opacities, sh_coeffs, optimizer, grad_accum, grad_count = (
                         _densify(
                             means,
                             log_scales,
                             quats,
                             logit_opacities,
-                            sh0,
+                            sh_coeffs,
                             optimizer,
                             grad_accum,
                             grad_count,
@@ -240,17 +252,31 @@ def train_gaussians(
                 alive = torch.sigmoid(logit_opacities) > 0.005
                 if (~alive).sum() > 0 and alive.sum() > 100:
                     n_before = len(means)
-                    means, log_scales, quats, logit_opacities, sh0, optimizer, grad_accum, grad_count = (
-                        _prune(means, log_scales, quats, logit_opacities, sh0, alive, optimizer)
+                    means, log_scales, quats, logit_opacities, sh_coeffs, optimizer, grad_accum, grad_count = (
+                        _prune(means, log_scales, quats, logit_opacities, sh_coeffs, alive, optimizer)
                     )
                     logger.info("Pruned %d transparent gaussians (%d -> %d)", n_before - len(means), n_before, len(means))
 
+                # Opacity reset: force optimizer to re-justify each gaussian
+                if (
+                    settings.opacity_reset_interval > 0
+                    and step > 0
+                    and step % settings.opacity_reset_interval == 0
+                ):
+                    logger.info("Resetting opacities at step %d", step)
+                    logit_opacities_reset = torch.full_like(logit_opacities.data, np.log(0.01 / 0.99))
+                    logit_opacities.data.copy_(logit_opacities_reset)
+
             optimizer.step()
+
+            # Log SH degree activation
+            if active_sh_degree > 0 and step in sh_activation_steps:
+                logger.info("Activated SH degree %d at step %d", active_sh_degree, step)
 
             # Progress reporting
             if step % 50 == 0:
                 loss_val = loss.item()
-                logger.info("Step %d/%d, loss=%.4f, n_gaussians=%d", step, max_steps, loss_val, len(means))
+                logger.info("Step %d/%d, loss=%.4f, n_gaussians=%d, sh_degree=%d", step, max_steps, loss_val, len(means), active_sh_degree)
                 if progress_cb:
                     progress_cb(step, loss_val)
 
@@ -263,14 +289,14 @@ def train_gaussians(
             log_scales.detach().cpu().numpy(),
             quats.detach().cpu().numpy(),
             logit_opacities.detach().cpu().numpy(),
-            sh0.detach().cpu().numpy(),
+            sh_coeffs.detach().cpu().numpy(),
         )
         logger.info("Exported PLY: %s (%d gaussians)", ply_path, len(means))
         return ply_path
 
 
 def _densify(
-    means, log_scales, quats, logit_opacities, sh0,
+    means, log_scales, quats, logit_opacities, sh_coeffs,
     optimizer, grad_accum, grad_count, grad_thresh, max_gaussians,
     split_scale_thresh,
 ):
@@ -286,7 +312,7 @@ def _densify(
     if high_grad.sum() == 0:
         grad_accum.zero_()
         grad_count.zero_()
-        return means, log_scales, quats, logit_opacities, sh0, optimizer, grad_accum, grad_count
+        return means, log_scales, quats, logit_opacities, sh_coeffs, optimizer, grad_accum, grad_count
 
     # Separate into split (large) vs clone (small) based on scale
     max_scale = torch.exp(log_scales).max(dim=-1).values  # per-gaussian max scale
@@ -301,7 +327,7 @@ def _densify(
     if n_new == 0 or n + n_new > max_gaussians:
         grad_accum.zero_()
         grad_count.zero_()
-        return means, log_scales, quats, logit_opacities, sh0, optimizer, grad_accum, grad_count
+        return means, log_scales, quats, logit_opacities, sh_coeffs, optimizer, grad_accum, grad_count
 
     logger.info("Densifying: split %d, clone %d gaussians (total: %d -> %d)", n_split, n_clone, n, n + n_new)
 
@@ -310,7 +336,7 @@ def _densify(
         "log_scales": [],
         "quats": [],
         "logit_opacities": [],
-        "sh0": [],
+        "sh_coeffs": [],
     }
 
     # Clone: duplicate small gaussians as-is
@@ -319,7 +345,7 @@ def _densify(
         new_parts["log_scales"].append(log_scales[clone_mask].detach().clone())
         new_parts["quats"].append(quats[clone_mask].detach().clone())
         new_parts["logit_opacities"].append(logit_opacities[clone_mask].detach().clone())
-        new_parts["sh0"].append(sh0[clone_mask].detach().clone())
+        new_parts["sh_coeffs"].append(sh_coeffs[clone_mask].detach().clone())
 
     # Split: create 2 children offset from parent, shrink scale by 1.6x
     if n_split > 0:
@@ -327,7 +353,7 @@ def _densify(
         parent_scales = log_scales[split_mask].detach()
         parent_quats = quats[split_mask].detach()
         parent_opacities = logit_opacities[split_mask].detach()
-        parent_sh0 = sh0[split_mask].detach()
+        parent_sh = sh_coeffs[split_mask].detach()
 
         # Sample offset along gaussian's extent
         stdev = torch.exp(parent_scales)  # (K, 3)
@@ -340,7 +366,7 @@ def _densify(
             new_parts["log_scales"].append(parent_scales - shrink)
             new_parts["quats"].append(parent_quats.clone())
             new_parts["logit_opacities"].append(parent_opacities.clone())
-            new_parts["sh0"].append(parent_sh0.clone())
+            new_parts["sh_coeffs"].append(parent_sh.clone())
 
         # Remove split parents by masking them out
         keep_mask = ~split_mask
@@ -348,20 +374,20 @@ def _densify(
         log_scales = log_scales[keep_mask].detach()
         quats = quats[keep_mask].detach()
         logit_opacities = logit_opacities[keep_mask].detach()
-        sh0 = sh0[keep_mask].detach()
+        sh_coeffs = sh_coeffs[keep_mask].detach()
 
     # Concatenate all
     all_means = [means.detach()] + new_parts["means"]
     all_log_scales = [log_scales.detach()] + new_parts["log_scales"]
     all_quats = [quats.detach()] + new_parts["quats"]
     all_logit_opacities = [logit_opacities.detach()] + new_parts["logit_opacities"]
-    all_sh0 = [sh0.detach()] + new_parts["sh0"]
+    all_sh_coeffs = [sh_coeffs.detach()] + new_parts["sh_coeffs"]
 
     means = torch.cat(all_means).requires_grad_(True)
     log_scales = torch.cat(all_log_scales).requires_grad_(True)
     quats = torch.cat(all_quats).requires_grad_(True)
     logit_opacities = torch.cat(all_logit_opacities).requires_grad_(True)
-    sh0 = torch.cat(all_sh0).requires_grad_(True)
+    sh_coeffs = torch.cat(all_sh_coeffs).requires_grad_(True)
 
     # Rebuild optimizer with new parameters
     optimizer = torch.optim.Adam(
@@ -370,7 +396,7 @@ def _densify(
             {"params": [log_scales], "lr": settings.lr_scales, "name": "scales"},
             {"params": [quats], "lr": settings.lr_quats, "name": "quats"},
             {"params": [logit_opacities], "lr": settings.lr_opacities, "name": "opacities"},
-            {"params": [sh0], "lr": settings.lr_sh, "name": "sh"},
+            {"params": [sh_coeffs], "lr": settings.lr_sh, "name": "sh"},
         ],
     )
 
@@ -379,17 +405,17 @@ def _densify(
     grad_accum = torch.zeros(new_n, device=device)
     grad_count = torch.zeros(new_n, device=device, dtype=torch.int32)
 
-    return means, log_scales, quats, logit_opacities, sh0, optimizer, grad_accum, grad_count
+    return means, log_scales, quats, logit_opacities, sh_coeffs, optimizer, grad_accum, grad_count
 
 
-def _prune(means, log_scales, quats, logit_opacities, sh0, keep_mask, optimizer):
+def _prune(means, log_scales, quats, logit_opacities, sh_coeffs, keep_mask, optimizer):
     """Remove gaussians where keep_mask is False."""
     device = means.device
     means = means[keep_mask].detach().requires_grad_(True)
     log_scales = log_scales[keep_mask].detach().requires_grad_(True)
     quats = quats[keep_mask].detach().requires_grad_(True)
     logit_opacities = logit_opacities[keep_mask].detach().requires_grad_(True)
-    sh0 = sh0[keep_mask].detach().requires_grad_(True)
+    sh_coeffs = sh_coeffs[keep_mask].detach().requires_grad_(True)
 
     optimizer = torch.optim.Adam(
         [
@@ -397,14 +423,14 @@ def _prune(means, log_scales, quats, logit_opacities, sh0, keep_mask, optimizer)
             {"params": [log_scales], "lr": settings.lr_scales, "name": "scales"},
             {"params": [quats], "lr": settings.lr_quats, "name": "quats"},
             {"params": [logit_opacities], "lr": settings.lr_opacities, "name": "opacities"},
-            {"params": [sh0], "lr": settings.lr_sh, "name": "sh"},
+            {"params": [sh_coeffs], "lr": settings.lr_sh, "name": "sh"},
         ],
     )
 
     new_n = len(means)
     grad_accum = torch.zeros(new_n, device=device)
     grad_count = torch.zeros(new_n, device=device, dtype=torch.int32)
-    return means, log_scales, quats, logit_opacities, sh0, optimizer, grad_accum, grad_count
+    return means, log_scales, quats, logit_opacities, sh_coeffs, optimizer, grad_accum, grad_count
 
 
 def export_ply(
@@ -413,41 +439,72 @@ def export_ply(
     log_scales: np.ndarray,
     quats: np.ndarray,
     logit_opacities: np.ndarray,
-    sh0: np.ndarray,
+    sh_coeffs: np.ndarray,
 ):
-    """Write standard 3DGS-compatible PLY binary file (vectorized)."""
+    """Write standard 3DGS-compatible PLY binary file with full SH coefficients.
+
+    Args:
+        sh_coeffs: (N, K, 3) array where K = (sh_degree+1)^2. The first
+                   entry (index 0) is the DC component, the rest are higher-order.
+    """
     n = len(means)
+    n_sh_bases = sh_coeffs.shape[1]  # e.g. 16 for degree 3
+    n_rest = n_sh_bases - 1  # number of higher-order bases (15 for degree 3)
     path.parent.mkdir(parents=True, exist_ok=True)
 
-    # PLY header
-    header = f"""ply
-format binary_little_endian 1.0
-element vertex {n}
-property float x
-property float y
-property float z
-property float f_dc_0
-property float f_dc_1
-property float f_dc_2
-property float opacity
-property float scale_0
-property float scale_1
-property float scale_2
-property float rot_0
-property float rot_1
-property float rot_2
-property float rot_3
-end_header
-"""
+    # PLY header — DC coefficients + rest coefficients
+    header_lines = [
+        "ply",
+        "format binary_little_endian 1.0",
+        f"element vertex {n}",
+        "property float x",
+        "property float y",
+        "property float z",
+        "property float f_dc_0",
+        "property float f_dc_1",
+        "property float f_dc_2",
+    ]
+    # Higher-order SH coefficients (f_rest_0 through f_rest_{3*n_rest-1})
+    for i in range(n_rest * 3):
+        header_lines.append(f"property float f_rest_{i}")
+    header_lines += [
+        "property float opacity",
+        "property float scale_0",
+        "property float scale_1",
+        "property float scale_2",
+        "property float rot_0",
+        "property float rot_1",
+        "property float rot_2",
+        "property float rot_3",
+        "end_header\n",
+    ]
+    header = "\n".join(header_lines)
 
-    # Build a structured array for fast binary write
-    # Property order: x,y,z, f_dc_0-2, opacity, scale_0-2, rot_0-3 = 14 floats
-    data = np.empty((n, 14), dtype=np.float32)
-    data[:, 0:3] = means.astype(np.float32)
-    data[:, 3:6] = sh0.astype(np.float32)
-    data[:, 6] = logit_opacities.astype(np.float32)
-    data[:, 7:10] = log_scales.astype(np.float32)
-    data[:, 10:14] = quats.astype(np.float32)
+    # Build data array: x,y,z (3) + f_dc (3) + f_rest (n_rest*3) + opacity (1) + scale (3) + rot (4)
+    n_floats = 3 + 3 + n_rest * 3 + 1 + 3 + 4
+    data = np.empty((n, n_floats), dtype=np.float32)
+
+    col = 0
+    # Position
+    data[:, col:col+3] = means.astype(np.float32)
+    col += 3
+    # DC coefficients: sh_coeffs[:, 0, :] -> (N, 3)
+    data[:, col:col+3] = sh_coeffs[:, 0, :].astype(np.float32)
+    col += 3
+    # Higher-order SH: sh_coeffs[:, 1:, :] -> (N, n_rest, 3) -> flatten to (N, n_rest*3)
+    # Standard 3DGS PLY ordering: interleave as [sh1_r, sh1_g, sh1_b, sh2_r, ...]
+    if n_rest > 0:
+        rest = sh_coeffs[:, 1:, :].reshape(n, n_rest * 3).astype(np.float32)
+        data[:, col:col+n_rest*3] = rest
+        col += n_rest * 3
+    # Opacity
+    data[:, col] = logit_opacities.astype(np.float32)
+    col += 1
+    # Scales
+    data[:, col:col+3] = log_scales.astype(np.float32)
+    col += 3
+    # Rotations
+    data[:, col:col+4] = quats.astype(np.float32)
 
     with open(path, "wb") as f:
         f.write(header.encode("ascii"))
