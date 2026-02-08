@@ -14,10 +14,12 @@ __pycache__/
 .eggs/
 
 # Environment
-*.sh
 .env
 .venv/
 env/
+
+# Installers
+Miniconda3-*.sh
 
 # OS
 .DS_Store
