@@ -1,0 +1,16 @@
+name = "render-queue"
+main = "src/index.ts"
+compatibility_date = "2024-06-20"
+
+[[r2_buckets]]
+binding = "ASSETS"
+bucket_name = "splat-assets"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "splat-jobs"
+database_id = "placeholder-replace-after-d1-create"
+
+# Set via `wrangler secret put WORKER_API_KEY`
+# [vars]
+# WORKER_API_KEY = "..." # Do NOT put secrets here; use `wrangler secret`

@@ -48,6 +48,14 @@ async def startup():
     asyncio.create_task(periodic_cleanup(jobs))
     logger.info("Server started. Jobs dir: %s", settings.jobs_dir.resolve())
 
+    # If queue URL is configured, start polling for remote jobs
+    if settings.queue_url:
+        from server.queue_client import QueueClient
+
+        queue_client = QueueClient()
+        asyncio.create_task(queue_client.run(process_remote_job))
+        logger.info("Queue polling enabled: %s", settings.queue_url)
+
 
 # --- Endpoints ---
 
@@ -298,6 +306,92 @@ async def process_job(job_id: str):
             for stage in job["stages"]:
                 if stage["status"] in ("pending", "running"):
                     stage["status"] = "failed"
+
+
+async def process_remote_job(
+    job_id: str,
+    video_path: Path,
+    job_dir: Path,
+    config: JobConfig,
+    stages: list[dict],
+    report_stages,
+):
+    """Run the pipeline for a remote queue job. Called by QueueClient."""
+
+    def update_stage(stage_name: str, status: str, detail: str | None = None):
+        for s in stages:
+            if s["name"] == stage_name:
+                s["status"] = status
+                if detail:
+                    s["detail"] = detail
+                break
+
+    async with gpu_lock:
+        # Stage 1: Frame extraction
+        update_stage("frame_extraction", "running")
+        await report_stages()
+        frame_paths = await asyncio.to_thread(
+            _run_frame_extraction, video_path, job_dir, config
+        )
+        update_stage("frame_extraction", "completed", f"{len(frame_paths)} frames")
+        await report_stages()
+
+        # Stage 2: Pose estimation
+        update_stage("pose_estimation", "running")
+        await report_stages()
+        poses, intrinsics, points, colors = await asyncio.to_thread(
+            _run_pose_estimation, frame_paths, config
+        )
+        update_stage("pose_estimation", "completed", f"{len(points)} points, {len(poses)} poses")
+        await report_stages()
+
+        # Rescale intrinsics
+        if config.resolution != settings.dust3r_resolution:
+            import numpy as np
+
+            scale = config.resolution / settings.dust3r_resolution
+            intrinsics = intrinsics.copy()
+            intrinsics[:, 0, :] *= scale
+            intrinsics[:, 1, :] *= scale
+            intrinsics[:, 2, :] = [0, 0, 1]
+
+        # Stage 3: Training
+        update_stage("training", "running")
+        await report_stages()
+
+        last_report = [0.0]
+
+        def on_progress(step: int, loss: float):
+            import time
+
+            update_stage(
+                "training",
+                "running",
+                f"step {step}/{config.training_iterations}, loss={loss:.4f}",
+            )
+            # Throttle status reports to avoid hammering the API
+            now = time.time()
+            if now - last_report[0] > 5:
+                last_report[0] = now
+                asyncio.get_event_loop().create_task(report_stages())
+
+        ply_path = await asyncio.to_thread(
+            _run_training, points, colors, poses, intrinsics, frame_paths, config, on_progress
+        )
+        update_stage("training", "completed")
+        await report_stages()
+
+        # Stage 4: Conversion
+        update_stage("conversion", "running")
+        await report_stages()
+        result_path = await asyncio.to_thread(_run_conversion, ply_path, config)
+        update_stage("conversion", "completed")
+        await report_stages()
+
+        # Clean up intermediate files
+        cleanup_job_dir(job_dir, keep_result=True)
+
+        return result_path
 
 
 def _run_frame_extraction(video_path: Path, job_dir: Path, config: JobConfig) -> list[Path]:

@@ -51,5 +51,10 @@ class Settings(BaseSettings):
     gpu_device: str = "cuda:0"
     max_gpu_memory_fraction: float = 0.9
 
+    # Queue (optional — set SPLAT_QUEUE_URL to enable remote job polling)
+    queue_url: str = ""
+    queue_api_key: str = ""
+    queue_poll_interval: int = 5
+
 
 settings = Settings()

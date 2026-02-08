@@ -1,0 +1,19 @@
+{
+  "name": "render-queue",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "migrate:local": "wrangler d1 execute splat-jobs --local --file=migrations/0001_create_jobs.sql",
+    "migrate:remote": "wrangler d1 execute splat-jobs --remote --file=migrations/0001_create_jobs.sql"
+  },
+  "dependencies": {
+    "hono": "^4.4.0"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20240620.0",
+    "typescript": "^5.5.0",
+    "wrangler": "^3.60.0"
+  }
+}
