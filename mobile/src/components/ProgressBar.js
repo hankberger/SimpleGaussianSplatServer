@@ -158,11 +158,8 @@ export default function ProgressBar() {
 
 const styles = StyleSheet.create({
   container: {
-    position: 'absolute',
-    top: 60,
-    left: 16,
-    right: 16,
-    zIndex: 100,
+    marginHorizontal: 16,
+    marginBottom: 12,
   },
   pill: {
     backgroundColor: 'rgba(11, 15, 26, 0.9)',
