@@ -1116,8 +1116,8 @@ async function main() {
                 // Pan (screen-space X/Y)
                 inv = translate4(
                     inv,
-                    (2 * e.deltaX * scale) / innerWidth,
-                    (2 * e.deltaY * scale) / innerHeight,
+                    (6 * e.deltaX * scale) / innerWidth,
+                    (6 * e.deltaY * scale) / innerHeight,
                     0,
                 );
             } else if (e.ctrlKey || e.metaKey) {
@@ -1133,7 +1133,7 @@ async function main() {
                     inv,
                     0,
                     0,
-                    (-3 * (e.deltaY * scale)) / innerHeight,
+                    (-10 * (e.deltaY * scale)) / innerHeight,
                 );
             }
 
@@ -1190,8 +1190,8 @@ async function main() {
             let inv = invert4(viewMatrix);
             inv = translate4(
                 inv,
-                (-2 * (e.clientX - startX)) / innerWidth,
-                (-2 * (e.clientY - startY)) / innerHeight,
+                (-6 * (e.clientX - startX)) / innerWidth,
+                (-6 * (e.clientY - startY)) / innerHeight,
                 0,
             );
             viewMatrix = invert4(inv);
@@ -1276,7 +1276,7 @@ async function main() {
                         e.touches[0].clientY - e.touches[1].clientY,
                     );
                 // Clamp dscale to prevent jumpy zooms
-                dscale = Math.max(0.9, Math.min(1.1, dscale));
+                dscale = Math.max(0.8, Math.min(1.2, dscale));
 
                 const dx =
                     (e.touches[0].clientX +
@@ -1291,9 +1291,9 @@ async function main() {
                 let inv = invert4(viewMatrix);
                 inv = rotate4(inv, dtheta, 0, 0, 1);
 
-                inv = translate4(inv, (-2 * dx) / innerWidth, (-2 * dy) / innerHeight, 0);
+                inv = translate4(inv, (-6 * dx) / innerWidth, (-6 * dy) / innerHeight, 0);
 
-                inv = translate4(inv, 0, 0, 1.5 * (1 - dscale));
+                inv = translate4(inv, 0, 0, 5 * (1 - dscale));
 
                 viewMatrix = invert4(inv);
 
@@ -1375,23 +1375,23 @@ async function main() {
 
         if (activeKeys.includes("ArrowUp")) {
             if (shiftKey) {
-                inv = translate4(inv, 0, -0.03, 0);
+                inv = translate4(inv, 0, -0.08, 0);
             } else {
-                inv = translate4(inv, 0, 0, 0.1);
+                inv = translate4(inv, 0, 0, 0.25);
             }
         }
         if (activeKeys.includes("ArrowDown")) {
             if (shiftKey) {
-                inv = translate4(inv, 0, 0.03, 0);
+                inv = translate4(inv, 0, 0.08, 0);
             } else {
-                inv = translate4(inv, 0, 0, -0.1);
+                inv = translate4(inv, 0, 0, -0.25);
             }
         }
         if (activeKeys.includes("ArrowLeft"))
-            inv = translate4(inv, -0.03, 0, 0);
+            inv = translate4(inv, -0.08, 0, 0);
         //
         if (activeKeys.includes("ArrowRight"))
-            inv = translate4(inv, 0.03, 0, 0);
+            inv = translate4(inv, 0.08, 0, 0);
         // inv = rotate4(inv, 0.01, 0, 1, 0);
         if (activeKeys.includes("KeyA")) inv = rotate4(inv, -0.01, 0, 1, 0);
         if (activeKeys.includes("KeyD")) inv = rotate4(inv, 0.01, 0, 1, 0);

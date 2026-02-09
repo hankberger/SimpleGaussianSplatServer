@@ -1,4 +1,4 @@
-import { jwt } from "hono/jwt";
+import { verify } from "hono/jwt";
 import type { Context, Next } from "hono";
 import type { Env, AppVariables } from "../types";
 
@@ -18,11 +18,7 @@ export function requireAuth() {
 
     const token = authHeader.slice(7);
     try {
-      // Use hono/jwt verify
-      const jwtMiddleware = jwt({ secret });
-      // We manually verify instead to extract payload
-      const { verify } = await import("hono/jwt");
-      const payload = await verify(token, secret) as { sub: string; email: string; exp: number };
+      const payload = await verify(token, secret, "HS256") as { sub: string; email: string; exp: number };
 
       c.set("userId", payload.sub);
       c.set("userEmail", payload.email);
@@ -49,8 +45,7 @@ export function optionalAuth() {
 
     const token = authHeader.slice(7);
     try {
-      const { verify } = await import("hono/jwt");
-      const payload = await verify(token, secret) as { sub: string; email: string; exp: number };
+      const payload = await verify(token, secret, "HS256") as { sub: string; email: string; exp: number };
 
       c.set("userId", payload.sub);
       c.set("userEmail", payload.email);
