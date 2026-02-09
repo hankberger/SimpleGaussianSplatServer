@@ -23,6 +23,7 @@ import { useJob } from '../context/JobContext';
 import { useFeed } from '../context/FeedContext';
 import { useAuth } from '../context/AuthContext';
 import AuthModal from '../components/AuthModal';
+import CommentsModal from '../components/CommentsModal';
 import ProgressBar from '../components/ProgressBar';
 
 const { height: SCREEN_HEIGHT, width: SCREEN_WIDTH } = Dimensions.get('window');
@@ -94,12 +95,14 @@ export default function ViewerScreen() {
     goPrevious,
     startDwellTimer,
     toggleLike,
+    updateCommentCount,
   } = useFeed();
 
   /* ---- mode state ---- */
   const [mode, setMode] = useState('feed'); // 'feed' | 'detail'
   const [visibleIndex, setVisibleIndex] = useState(0);
   const [authModalVisible, setAuthModalVisible] = useState(false);
+  const [commentsPostId, setCommentsPostId] = useState(null);
 
   /* ---- detail animations ---- */
   const detailTranslateY = useRef(new Animated.Value(SCREEN_HEIGHT)).current;
@@ -323,6 +326,15 @@ export default function ViewerScreen() {
               </Text>
             </TouchableOpacity>
 
+            <TouchableOpacity
+              style={styles.cardAction}
+              onPress={() => setCommentsPostId(item.post_id)}
+              activeOpacity={0.7}
+            >
+              <Ionicons name="chatbubble-outline" size={20} color="#94a3b8" />
+              <Text style={styles.cardActionText}>{item.comment_count || 0}</Text>
+            </TouchableOpacity>
+
             <View style={styles.cardAction}>
               <Ionicons name="eye-outline" size={20} color="#94a3b8" />
               <Text style={styles.cardActionText}>{item.view_count || 0}</Text>
@@ -333,7 +345,7 @@ export default function ViewerScreen() {
         </View>
       );
     },
-    [visibleIndex, openDetail, handleLike]
+    [visibleIndex, openDetail, handleLike, setCommentsPostId]
   );
 
   const keyExtractor = useCallback((item) => item.post_id, []);
@@ -486,6 +498,16 @@ export default function ViewerScreen() {
                 </Text>
               </TouchableOpacity>
 
+              {/* Comments */}
+              <TouchableOpacity
+                style={styles.sidebarItem}
+                onPress={() => setCommentsPostId(currentItem?.post_id)}
+                activeOpacity={0.7}
+              >
+                <Ionicons name="chatbubble-outline" size={28} color="#f1f5f9" style={styles.iconShadow} />
+                <Text style={styles.sidebarCount}>{currentItem?.comment_count || 0}</Text>
+              </TouchableOpacity>
+
               {/* Views */}
               <View style={styles.sidebarItem}>
                 <Ionicons name="eye-outline" size={28} color="#f1f5f9" style={styles.iconShadow} />
@@ -538,6 +560,13 @@ export default function ViewerScreen() {
 
       {/* Auth modal */}
       <AuthModal visible={authModalVisible} onClose={() => setAuthModalVisible(false)} />
+
+      {/* Comments modal */}
+      <CommentsModal
+        visible={!!commentsPostId}
+        onClose={() => setCommentsPostId(null)}
+        postId={commentsPostId}
+      />
     </View>
   );
 }

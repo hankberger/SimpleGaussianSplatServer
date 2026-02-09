@@ -16,7 +16,9 @@
     "migrate:local:v5": "wrangler d1 execute splat-jobs --local --file=migrations/0005_create_likes.sql",
     "migrate:remote:v5": "wrangler d1 execute splat-jobs --remote --file=migrations/0005_create_likes.sql",
     "migrate:local:v6": "wrangler d1 execute splat-jobs --local --file=migrations/0006_create_posts.sql",
-    "migrate:remote:v6": "wrangler d1 execute splat-jobs --remote --file=migrations/0006_create_posts.sql"
+    "migrate:remote:v6": "wrangler d1 execute splat-jobs --remote --file=migrations/0006_create_posts.sql",
+    "migrate:local:v7": "wrangler d1 execute splat-jobs --local --file=migrations/0007_create_comments.sql",
+    "migrate:remote:v7": "wrangler d1 execute splat-jobs --remote --file=migrations/0007_create_comments.sql"
   },
   "dependencies": {
     "hono": "^4.4.0"

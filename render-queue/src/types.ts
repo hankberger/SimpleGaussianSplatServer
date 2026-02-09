@@ -48,6 +48,7 @@ export interface PostRow {
   description: string | null;
   view_count: number;
   like_count: number;
+  comment_count: number;
   created_at: string;
   updated_at: string;
 }
@@ -84,6 +85,7 @@ export interface FeedItem {
   created_at: string;
   view_count: number;
   like_count: number;
+  comment_count: number;
   splat_url: string;
   liked_by_me: boolean;
 }
@@ -142,6 +144,35 @@ export interface AuthResponse {
 
 export interface FeedResponse {
   items: FeedItem[];
+  total: number;
+  offset: number;
+  limit: number;
+}
+
+export interface CommentRow {
+  id: string;
+  post_id: string;
+  user_id: string;
+  parent_id: string | null;
+  body: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CommentItem {
+  id: string;
+  post_id: string;
+  user_id: string;
+  parent_id: string | null;
+  display_name: string | null;
+  body: string;
+  created_at: string;
+  replies: CommentItem[];
+  reply_count: number;
+}
+
+export interface CommentsResponse {
+  comments: CommentItem[];
   total: number;
   offset: number;
   limit: number;

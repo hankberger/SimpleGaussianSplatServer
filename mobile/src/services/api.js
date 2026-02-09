@@ -85,6 +85,16 @@ export async function getFeed(limit = 10, offset = 0) {
   return response.json();
 }
 
+export async function getMyPosts(limit = 30, offset = 0) {
+  const response = await fetch(`${API_BASE}/api/v1/feed/me?limit=${limit}&offset=${offset}`, {
+    headers: authHeaders(),
+  });
+  if (!response.ok) {
+    throw new Error(`Failed to load posts (${response.status})`);
+  }
+  return response.json();
+}
+
 export async function trackView(postId) {
   // Fire-and-forget — don't await or throw on failure
   fetch(`${API_BASE}/api/v1/feed/${postId}/view`, {
@@ -162,6 +172,45 @@ export async function getMe() {
   });
   if (!response.ok) {
     throw new Error(`Failed to get user (${response.status})`);
+  }
+  return response.json();
+}
+
+// Comments API functions
+
+export async function getComments(postId, limit = 20, offset = 0) {
+  const response = await fetch(
+    `${API_BASE}/api/v1/feed/${postId}/comments?limit=${limit}&offset=${offset}`,
+    { headers: authHeaders() }
+  );
+  if (!response.ok) {
+    throw new Error(`Failed to load comments (${response.status})`);
+  }
+  return response.json();
+}
+
+export async function postComment(postId, body, parentId) {
+  const payload = { body };
+  if (parentId) payload.parent_id = parentId;
+
+  const response = await fetch(`${API_BASE}/api/v1/feed/${postId}/comments`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) {
+    throw new Error(`Failed to post comment (${response.status})`);
+  }
+  return response.json();
+}
+
+export async function deleteComment(postId, commentId) {
+  const response = await fetch(`${API_BASE}/api/v1/feed/${postId}/comments/${commentId}`, {
+    method: 'DELETE',
+    headers: authHeaders(),
+  });
+  if (!response.ok) {
+    throw new Error(`Failed to delete comment (${response.status})`);
   }
   return response.json();
 }

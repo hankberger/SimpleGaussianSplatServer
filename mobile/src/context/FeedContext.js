@@ -72,6 +72,16 @@ export function FeedProvider({ children }) {
     setCurrentIndex((prev) => Math.max(0, prev - 1));
   }, []);
 
+  const updateCommentCount = useCallback((postId, delta) => {
+    setItems((prev) =>
+      prev.map((i) =>
+        i.post_id === postId
+          ? { ...i, comment_count: Math.max(0, (i.comment_count || 0) + delta) }
+          : i
+      )
+    );
+  }, []);
+
   const toggleLike = useCallback(async (postId, isAuthenticated) => {
     if (!isAuthenticated) {
       return { needsAuth: true };
@@ -141,6 +151,7 @@ export function FeedProvider({ children }) {
         goPrevious,
         startDwellTimer,
         toggleLike,
+        updateCommentCount,
       }}
     >
       {children}
