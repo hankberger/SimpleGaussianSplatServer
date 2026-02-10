@@ -814,44 +814,12 @@ async function main() {
         carousel = false;
     } catch (err) {}
 
-    // Hide menu in feed mode
-    const feedMode = params.get("feed") === "1";
-    if (feedMode) {
-        const splatMenu = document.getElementById("splat-menu");
-        if (splatMenu) splatMenu.style.display = "none";
-    }
-
-    // Populate the splat menu
-    const splatSelect = document.getElementById("splat-select");
-    let splats = [];
-    try {
-        const listReq = await fetch("/api/splats");
-        splats = await listReq.json();
-    } catch (err) {
-        console.warn("Could not load splat list:", err);
-    }
-
-    const urlParam = params.get("url");
-    let initialUrl;
-    if (urlParam) {
-        initialUrl = urlParam;
-    } else if (splats.length > 0) {
-        initialUrl = splats[0].url;
-    } else {
-        initialUrl = "/jobs/1fdf9a4c32a5/output.splat";
-    }
-
-    if (splats.length > 0) {
-        splatSelect.innerHTML = "";
-        for (const splat of splats) {
-            const opt = document.createElement("option");
-            opt.value = splat.url;
-            opt.textContent = splat.name;
-            if (splat.url === initialUrl) opt.selected = true;
-            splatSelect.appendChild(opt);
-        }
-    } else {
-        splatSelect.innerHTML = '<option value="">No splats found</option>';
+    const initialUrl = params.get("url");
+    if (!initialUrl) {
+        document.getElementById("message").innerText =
+            "No splat URL provided. Use ?url=<splat_url>";
+        document.getElementById("spinner").style.display = "none";
+        return;
     }
 
     const url = new URL(initialUrl, location.origin);
@@ -1649,84 +1617,6 @@ async function main() {
     let bytesRead = 0;
     let lastVertexCount = -1;
     let stopLoading = false;
-
-    async function loadSplatFromUrl(splatUrl) {
-        stopLoading = true;
-        // Wait a tick to let any in-progress read loop exit
-        await new Promise((r) => setTimeout(r, 0));
-        stopLoading = false;
-
-        vertexCount = 0;
-        bytesRead = 0;
-        lastVertexCount = -1;
-
-        document.getElementById("spinner").style.display = "";
-        document.getElementById("progress").style.display = "";
-        document.getElementById("progress").style.width = "0%";
-
-        const loadUrl = new URL(splatUrl, location.origin);
-        const loadReq = await fetch(loadUrl, {
-            mode: "cors",
-            credentials: "omit",
-        });
-        if (loadReq.status != 200)
-            throw new Error(loadReq.status + " Unable to load " + loadReq.url);
-
-        const loadContentLength = loadReq.headers.get("content-length");
-        let loadReader;
-        if (loadContentLength) {
-            splatData = new Uint8Array(parseInt(loadContentLength, 10));
-            loadReader = loadReq.body.getReader();
-        } else {
-            const buf = await loadReq.arrayBuffer();
-            splatData = new Uint8Array(buf);
-            loadReader = null;
-        }
-
-        if (loadReader) {
-            while (true) {
-                const { done, value } = await loadReader.read();
-                if (done || stopLoading) break;
-
-                splatData.set(value, bytesRead);
-                bytesRead += value.length;
-
-                if (vertexCount > lastVertexCount) {
-                    if (!isPly(splatData)) {
-                        worker.postMessage({
-                            buffer: splatData.buffer,
-                            vertexCount: Math.floor(bytesRead / rowLength),
-                        });
-                    }
-                    lastVertexCount = vertexCount;
-                }
-            }
-        } else {
-            bytesRead = splatData.length;
-        }
-        if (!stopLoading) {
-            if (isPly(splatData)) {
-                worker.postMessage({ ply: splatData.buffer, save: false });
-            } else {
-                const vc = Math.floor(bytesRead / rowLength);
-                worker.postMessage({
-                    buffer: splatData.buffer,
-                    vertexCount: vc,
-                });
-                if (vc > 0) onSceneLoaded(splatData, vc);
-            }
-        }
-    }
-
-    // Handle menu selection
-    splatSelect.addEventListener("change", (e) => {
-        if (e.target.value) {
-            hasHashView = false;
-            carousel = true;
-            start = Date.now();
-            loadSplatFromUrl(e.target.value);
-        }
-    });
 
     // Initial load stream
     if (reader) {

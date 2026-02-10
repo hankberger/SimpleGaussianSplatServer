@@ -160,55 +160,12 @@
 			body.nohf #progress, body.nohf .cube-face {
 				background: #ff9d0d;
 			}
-
-			#splat-menu {
-				position: absolute;
-				bottom: 10px;
-				left: 50%;
-				transform: translateX(-50%);
-				z-index: 1000;
-				display: flex;
-				align-items: center;
-				gap: 8px;
-				background: rgba(0, 0, 0, 0.7);
-				padding: 8px 16px;
-				border-radius: 8px;
-				backdrop-filter: blur(8px);
-			}
-			#splat-menu label {
-				color: #ccc;
-				font-size: 13px;
-				white-space: nowrap;
-			}
-			#splat-select {
-				background: rgba(255, 255, 255, 0.1);
-				color: white;
-				border: 1px solid rgba(255, 255, 255, 0.3);
-				border-radius: 4px;
-				padding: 4px 8px;
-				font-size: 13px;
-				cursor: pointer;
-				min-width: 160px;
-			}
-			#splat-select:hover {
-				background: rgba(255, 255, 255, 0.2);
-			}
-			#splat-select option {
-				background: #222;
-				color: white;
-			}
 		</style>
 	</head>
 	<body>
 		<script>
 			if(location.host.includes('hf.space')) document.body.classList.add('nohf');
 		</script>
-		<div id="splat-menu">
-			<label for="splat-select">Scene:</label>
-			<select id="splat-select">
-				<option value="">Loading...</option>
-			</select>
-		</div>
 
 		<div id="progress"></div>
 
