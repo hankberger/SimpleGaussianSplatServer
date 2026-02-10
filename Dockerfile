@@ -38,7 +38,9 @@ RUN cd dust3r/croco/models/curope/ \
 
 # Install server dependencies (separate COPY for layer caching)
 COPY server/requirements.txt /app/server/requirements.txt
-RUN pip install --no-cache-dir -r server/requirements.txt
+# Install server deps; --no-build-isolation lets PPISP's CUDA extensions
+# find the already-installed torch + CUDA toolkit at compile time.
+RUN pip install --no-cache-dir --no-build-isolation -r server/requirements.txt
 
 # ==============================================================================
 # Stage 2: Runtime — lean(ish) image with everything needed to run
