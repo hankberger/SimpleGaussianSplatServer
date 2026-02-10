@@ -12,3 +12,4 @@ numpy>=1.24.0
 scipy>=1.11.0
 tqdm>=4.66.0
 httpx>=0.25.0
+ppisp @ git+https://github.com/nv-tlabs/ppisp.git@v1.0.0

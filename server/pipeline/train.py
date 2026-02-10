@@ -162,6 +162,28 @@ def train_gaussians(
 
         logger.info("Densification will run until step %d (%.0f%% of %d)", densify_end, densify_end / max_steps * 100, max_steps)
 
+        # PPISP photometric post-processing (optional)
+        try:
+            from ppisp import PPISP
+            ppisp_module = PPISP(num_cameras=1, num_frames=n_images).to(device)
+            ppisp_optimizers = ppisp_module.create_optimizers()
+            ppisp_schedulers = ppisp_module.create_schedulers(ppisp_optimizers, max_steps)
+            # Precompute pixel coordinate grid
+            ys, xs = torch.meshgrid(
+                torch.arange(img_h, device=device),
+                torch.arange(img_w, device=device),
+                indexing="ij",
+            )
+            pixel_coords = torch.stack([xs, ys], dim=-1).float()  # (H, W, 2)
+            use_ppisp = True
+            logger.info("PPISP enabled: photometric correction active")
+        except ImportError:
+            use_ppisp = False
+            ppisp_module = None
+            ppisp_optimizers = []
+            ppisp_schedulers = []
+            logger.info("PPISP not installed, skipping photometric correction")
+
         # Training loop
         for step in range(max_steps):
             # Update means LR with exponential decay
@@ -172,6 +194,9 @@ def train_gaussians(
                         pg["lr"] = new_lr
 
             optimizer.zero_grad()
+            if use_ppisp:
+                for opt in ppisp_optimizers:
+                    opt.zero_grad(set_to_none=True)
 
             # Cycle through images
             img_idx = step % n_images
@@ -205,7 +230,16 @@ def train_gaussians(
                 sh_degree=active_sh_degree,
             )
             # renders: (1, H, W, C) -> (C, H, W)
-            rendered = renders[0].permute(2, 0, 1)
+            rendered = renders[0]  # (H, W, 3)
+            if use_ppisp:
+                rendered = ppisp_module(
+                    rendered,
+                    pixel_coords,
+                    resolution=(img_w, img_h),
+                    camera_idx=0,
+                    frame_idx=img_idx,
+                )
+            rendered = rendered.permute(2, 0, 1)  # (C, H, W)
 
             # L1 + SSIM loss
             l1_loss = F.l1_loss(rendered, gt_image)
@@ -213,6 +247,8 @@ def train_gaussians(
                 rendered.unsqueeze(0), gt_image.unsqueeze(0)
             )
             loss = (1.0 - settings.ssim_weight) * l1_loss + settings.ssim_weight * ssim_loss
+            if use_ppisp:
+                loss = loss + settings.ppisp_reg_weight * ppisp_module.get_regularization_loss()
 
             loss.backward()
 
@@ -274,6 +310,11 @@ def train_gaussians(
                     logit_opacities.data.copy_(logit_opacities_reset)
 
             optimizer.step()
+            if use_ppisp:
+                for opt in ppisp_optimizers:
+                    opt.step()
+                for sched in ppisp_schedulers:
+                    sched.step()
 
             # Clamp scales to prevent needle artifacts
             with torch.no_grad():

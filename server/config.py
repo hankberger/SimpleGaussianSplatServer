@@ -44,6 +44,9 @@ class Settings(BaseSettings):
     densify_max_gaussians: int = 1_000_000
     knn_k: int = 4
 
+    # PPISP (photometric post-processing)
+    ppisp_reg_weight: float = 0.01
+
     # Job management
     max_upload_size_mb: int = 500
     job_ttl_hours: int = 24
