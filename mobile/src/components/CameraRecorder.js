@@ -80,11 +80,19 @@ export default function CameraRecorder({ onVideoRecorded, onCancel }) {
 
   return (
     <View style={styles.container}>
+      {/*
+        zoom={0} = no zoom = widest FOV available on the main lens.
+        expo-camera does not expose ultrawide lens switching or FPS control
+        for video recording. FPS doesn't matter here anyway — the server
+        uses scene-change detection to extract frames, so capture framerate
+        has no effect on splat quality (only file size).
+      */}
       <CameraView
         ref={cameraRef}
         style={styles.camera}
         mode="video"
         facing="back"
+        zoom={0}
       />
 
       {/* Timer */}
