@@ -43,7 +43,11 @@ class Settings(BaseSettings):
     densify_start: int = 500
     densify_end: int = 4000
     densify_interval: int = 100
-    densify_grad_thresh: float = 0.00015
+    # gsplat DefaultStrategy grow threshold (grow_grad2d). 0.0002 is gsplat's
+    # default; higher = fewer Gaussians cloned/split = faster training. (The old
+    # hand-rolled densifier used 0.00015, which over-grew under the new strategy
+    # and inflated step time.)
+    densify_grad_thresh: float = 0.0002
     densify_max_gaussians: int = 1_000_000
     knn_k: int = 4
 
