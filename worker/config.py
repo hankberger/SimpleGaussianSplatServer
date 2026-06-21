@@ -36,6 +36,9 @@ class Settings(BaseSettings):
     lr_sh: float = 2.5e-3
     ssim_weight: float = 0.2
     sh_degree: int = 3
+    # gsplat rasterization mode: "antialiased" compensates opacity for the 2D
+    # dilation filter — cleaner edges/fewer aliasing artifacts than "classic".
+    rasterize_mode: str = "antialiased"
     opacity_reset_interval: int = 3000
     densify_start: int = 500
     densify_end: int = 4000

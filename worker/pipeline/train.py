@@ -228,6 +228,7 @@ def train_gaussians(
                 height=img_h,
                 packed=False,
                 sh_degree=active_sh_degree,
+                rasterize_mode=settings.rasterize_mode,
             )
             # renders: (1, H, W, C) -> (C, H, W)
             rendered = renders[0]  # (H, W, 3)
@@ -401,6 +402,7 @@ def _save_preview(
             height=img_h,
             packed=False,
             sh_degree=sh_degree,
+            rasterize_mode=settings.rasterize_mode,
         )
 
     # (1, H, W, 3) RGB float -> (H, W, 3) uint8
