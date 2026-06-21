@@ -47,6 +47,11 @@ class Settings(BaseSettings):
     densify_start: int = 500
     densify_end: int = 4000
     densify_interval: int = 100
+    # Mixed precision (autocast) around the loss math. gsplat's CUDA rasterizer
+    # runs fp32 regardless, so the gain is modest (mainly the SSIM conv) and it's
+    # off by default. No GradScaler is used, so the strategy's gradient-based
+    # densification thresholds stay in fp32.
+    use_amp: bool = False
     # gsplat DefaultStrategy grow threshold (grow_grad2d). 0.0002 is gsplat's
     # default; higher = fewer Gaussians cloned/split = faster training. (The old
     # hand-rolled densifier used 0.00015, which over-grew under the new strategy
