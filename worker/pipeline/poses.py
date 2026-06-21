@@ -64,9 +64,16 @@ def estimate_poses(
     pairs = make_pairs(images, scene_graph=graph_mode, prefilter=None, symmetrize=True)
     logger.info("Created %d image pairs", len(pairs))
 
-    # Pairwise inference
-    logger.info("Running pairwise inference...")
-    output = inference(pairs, model, device, batch_size=1)
+    # Pairwise inference — the ViT-Large forward is the bulk of pose time, so
+    # run it under autocast (bf16/fp16). DUSt3R is inference-only here, and the
+    # half-precision outputs feed the fp32 global alignment fine.
+    logger.info("Running pairwise inference (amp=%s)...", settings.dust3r_amp_dtype if settings.dust3r_amp else "off")
+    if settings.dust3r_amp:
+        amp_dtype = torch.bfloat16 if settings.dust3r_amp_dtype == "bf16" else torch.float16
+        with torch.autocast(device_type="cuda", dtype=amp_dtype):
+            output = inference(pairs, model, device, batch_size=1)
+    else:
+        output = inference(pairs, model, device, batch_size=1)
 
     # Global alignment
     logger.info("Running global alignment (%d iterations)...", settings.dust3r_alignment_iters)

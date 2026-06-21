@@ -25,6 +25,11 @@ class Settings(BaseSettings):
     dust3r_max_pairs_complete: int = 20
     dust3r_max_points: int = 500_000
     dust3r_confidence_threshold: float = 1.5
+    # Half-precision DUSt3R pairwise inference — the ViT-Large forward dominates
+    # pose-estimation time, and autocast roughly halves it. bf16 is the safe
+    # default on Ada/Ampere (no overflow); set "fp16" if bf16 is unavailable.
+    dust3r_amp: bool = True
+    dust3r_amp_dtype: str = "bf16"
 
     # gsplat training
     default_training_iterations: int = 10000
