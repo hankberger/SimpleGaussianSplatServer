@@ -308,10 +308,16 @@ def train_gaussians(
                 )
             rendered = rendered.permute(2, 0, 1)  # (C, H, W)
 
-            # L1 + SSIM loss
+            # L1 every step; SSIM (more expensive) only every ssim_every steps.
             l1_loss = F.l1_loss(rendered, gt_image)
-            ssim_loss = 1.0 - ssim_fn(rendered.unsqueeze(0), gt_image.unsqueeze(0))
-            loss = (1.0 - settings.ssim_weight) * l1_loss + settings.ssim_weight * ssim_loss
+            if settings.ssim_every <= 1 or step % settings.ssim_every == 0:
+                ssim_loss = 1.0 - ssim_fn(rendered.unsqueeze(0), gt_image.unsqueeze(0))
+                loss = (
+                    (1.0 - settings.ssim_weight) * l1_loss
+                    + settings.ssim_weight * ssim_loss
+                )
+            else:
+                loss = l1_loss
             if use_ppisp:
                 loss = loss + settings.ppisp_reg_weight * ppisp_module.get_regularization_loss()
 

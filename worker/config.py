@@ -35,6 +35,10 @@ class Settings(BaseSettings):
     lr_opacities: float = 5e-2
     lr_sh: float = 2.5e-3
     ssim_weight: float = 0.2
+    # Compute the (relatively expensive) SSIM term every Nth step; other steps
+    # use L1 only. 2 roughly halves SSIM cost with negligible quality impact.
+    # Set to 1 to compute SSIM every step.
+    ssim_every: int = 2
     sh_degree: int = 3
     # gsplat rasterization mode: "antialiased" compensates opacity for the 2D
     # dilation filter — cleaner edges/fewer aliasing artifacts than "classic".
