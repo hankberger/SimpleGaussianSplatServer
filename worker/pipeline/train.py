@@ -91,63 +91,84 @@ def train_gaussians(
             if Ks[i, 1, 1] == 0:
                 Ks[i, 1, 1] = Ks[i, 0, 0]
 
-        # Initialize Gaussian parameters
-        means = torch.from_numpy(points).float().to(device).requires_grad_(True)
+        # Initialize Gaussian parameters as a ParameterDict so gsplat's
+        # DefaultStrategy can manage densification/pruning and migrate the
+        # matching optimizer state. Representation: means (xyz), scales (log),
+        # quats (raw, normalized in the rasterizer), opacities (logit), sh.
+        means_init = torch.from_numpy(points).float().to(device)
 
-        # Scales from KNN distances
+        # Scales from KNN distances (log space)
         log_scales_np = _compute_knn_scale(points, k=settings.knn_k)
-        log_scales = (
-            torch.from_numpy(np.stack([log_scales_np] * 3, axis=-1))
-            .float()
-            .to(device)
-            .requires_grad_(True)
+        scales_init = (
+            torch.from_numpy(np.stack([log_scales_np] * 3, axis=-1)).float().to(device)
         )
 
         # Quaternions: identity rotation
-        quats = torch.zeros(n_points, 4, device=device)
-        quats[:, 0] = 1.0
-        quats = quats.requires_grad_(True)
+        quats_init = torch.zeros(n_points, 4, device=device)
+        quats_init[:, 0] = 1.0
 
         # Opacities: logit(0.1)
-        logit_opacities = (
-            torch.full((n_points,), np.log(0.1 / 0.9), device=device)
-            .requires_grad_(True)
-        )
+        opacities_init = torch.full((n_points,), np.log(0.1 / 0.9), device=device)
 
-        # Spherical harmonics: degree 0 initialized from point colors,
-        # higher degrees (1-3) initialized to zero for progressive activation
+        # Spherical harmonics: degree 0 from point colors, higher degrees zero
+        # (progressively activated during training)
         sh_degree_max = settings.sh_degree
         n_sh_bases = (sh_degree_max + 1) ** 2  # 16 for degree 3
-        sh_coeffs = torch.zeros(n_points, n_sh_bases, 3, device=device)
-        sh_coeffs[:, 0, :] = torch.from_numpy((colors - 0.5) / SH_C0).float()
-        sh_coeffs = sh_coeffs.requires_grad_(True)
+        sh_init = torch.zeros(n_points, n_sh_bases, 3, device=device)
+        sh_init[:, 0, :] = torch.from_numpy((colors - 0.5) / SH_C0).float()
 
-        # Optimizer
-        optimizer = torch.optim.Adam(
-            [
-                {"params": [means], "lr": settings.lr_means, "name": "means"},
-                {"params": [log_scales], "lr": settings.lr_scales, "name": "scales"},
-                {"params": [quats], "lr": settings.lr_quats, "name": "quats"},
-                {"params": [logit_opacities], "lr": settings.lr_opacities, "name": "opacities"},
-                {"params": [sh_coeffs], "lr": settings.lr_sh, "name": "sh"},
-            ],
-        )
+        params = torch.nn.ParameterDict(
+            {
+                "means": torch.nn.Parameter(means_init),
+                "scales": torch.nn.Parameter(scales_init),
+                "quats": torch.nn.Parameter(quats_init),
+                "opacities": torch.nn.Parameter(opacities_init),
+                "sh": torch.nn.Parameter(sh_init),
+            }
+        ).to(device)
+
+        # One Adam per parameter — gsplat strategies require each optimizer to
+        # hold a single param group so they can grow/prune its state in lockstep.
+        lrs = {
+            "means": settings.lr_means,
+            "scales": settings.lr_scales,
+            "quats": settings.lr_quats,
+            "opacities": settings.lr_opacities,
+            "sh": settings.lr_sh,
+        }
+        optimizers = {
+            name: torch.optim.Adam(
+                [{"params": params[name], "lr": lr, "name": name}], eps=1e-15
+            )
+            for name, lr in lrs.items()
+        }
 
         ssim_fn = StructuralSimilarityIndexMeasure(data_range=1.0).to(device)
 
-        # Gradient accumulator for densification
-        grad_accum = torch.zeros(n_points, device=device)
-        grad_count = torch.zeros(n_points, device=device, dtype=torch.int32)
-
-        # Scale threshold for split vs clone: gaussians larger than this get split
-        scene_extent = np.linalg.norm(points.max(axis=0) - points.min(axis=0))
-        split_scale_thresh = scene_extent * 0.01
-        # Max scale: prune/clamp gaussians exceeding 10% of scene extent
-        max_scale_thresh = scene_extent * 0.1
-        log_max_scale = np.log(max(max_scale_thresh, 1e-6))
-
-        # Scale densification end proportionally with training length
+        # Scale the densification (refine) window with training length.
         densify_end = max(settings.densify_end, int(max_steps * 0.7))
+        scene_scale = float(np.linalg.norm(points.max(axis=0) - points.min(axis=0)))
+
+        # gsplat DefaultStrategy: classic 3DGS grow (clone/split) + prune +
+        # opacity reset, with correct optimizer-state migration. Replaces the
+        # previous hand-rolled densification, which rebuilt Adam on every refine
+        # step and thereby discarded all moment estimates. Existing tunables map
+        # onto the strategy's knobs so behaviour stays controllable via config.
+        from gsplat.strategy import DefaultStrategy
+
+        strategy = DefaultStrategy(
+            prune_opa=0.005,
+            grow_grad2d=settings.densify_grad_thresh,
+            grow_scale3d=0.01,
+            prune_scale3d=0.1,
+            refine_start_iter=settings.densify_start,
+            refine_stop_iter=densify_end,
+            reset_every=settings.opacity_reset_interval,
+            refine_every=settings.densify_interval,
+            verbose=True,
+        )
+        strategy_state = strategy.initialize_state(scene_scale=scene_scale)
+        strategy.check_sanity(params, optimizers)
 
         # LR schedule for means: exponential decay from lr_means to lr_means_final
         lr_means_init = settings.lr_means
@@ -188,12 +209,12 @@ def train_gaussians(
         for step in range(max_steps):
             # Update means LR with exponential decay
             if lr_decay_rate < 1.0:
-                new_lr = lr_means_init * (lr_decay_rate ** step)
-                for pg in optimizer.param_groups:
-                    if pg.get("name") == "means":
-                        pg["lr"] = new_lr
+                optimizers["means"].param_groups[0]["lr"] = lr_means_init * (
+                    lr_decay_rate ** step
+                )
 
-            optimizer.zero_grad()
+            for opt in optimizers.values():
+                opt.zero_grad(set_to_none=True)
             if use_ppisp:
                 for opt in ppisp_optimizers:
                     opt.zero_grad(set_to_none=True)
@@ -202,26 +223,23 @@ def train_gaussians(
             img_idx = step % n_images
             gt_image = images[img_idx]  # (C, H, W)
 
-            # Current Gaussian parameters
-            opacities = torch.sigmoid(logit_opacities)
-            scales = torch.exp(log_scales)
-
             # Progressive SH degree: activate higher bands as training progresses
             active_sh_degree = 0
             for d in range(1, sh_degree_max + 1):
                 if d < len(sh_activation_steps) and step >= sh_activation_steps[d]:
                     active_sh_degree = d
 
-            # Rasterize with SH coefficients — gsplat computes view-dependent color
+            # Rasterize with SH coefficients — gsplat computes view-dependent color.
+            # quats are passed raw; the rasterizer normalizes them internally.
             viewmat = w2c[img_idx : img_idx + 1]  # (1, 4, 4)
             K = Ks[img_idx : img_idx + 1]  # (1, 3, 3)
 
-            renders, alphas, meta = rasterization(
-                means=means,
-                quats=quats / (quats.norm(dim=-1, keepdim=True) + 1e-8),
-                scales=scales,
-                opacities=opacities,
-                colors=sh_coeffs,
+            renders, alphas, info = rasterization(
+                means=params["means"],
+                quats=params["quats"],
+                scales=torch.exp(params["scales"]),
+                opacities=torch.sigmoid(params["opacities"]),
+                colors=params["sh"],
                 viewmats=viewmat,
                 Ks=K,
                 width=img_w,
@@ -230,6 +248,10 @@ def train_gaussians(
                 sh_degree=active_sh_degree,
                 rasterize_mode=settings.rasterize_mode,
             )
+
+            # Strategy bookkeeping: retain/track 2D-means gradients for this step.
+            strategy.step_pre_backward(params, optimizers, strategy_state, step, info)
+
             # renders: (1, H, W, C) -> (C, H, W)
             rendered = renders[0]  # (H, W, 3)
             if use_ppisp:
@@ -244,82 +266,26 @@ def train_gaussians(
 
             # L1 + SSIM loss
             l1_loss = F.l1_loss(rendered, gt_image)
-            ssim_loss = 1.0 - ssim_fn(
-                rendered.unsqueeze(0), gt_image.unsqueeze(0)
-            )
+            ssim_loss = 1.0 - ssim_fn(rendered.unsqueeze(0), gt_image.unsqueeze(0))
             loss = (1.0 - settings.ssim_weight) * l1_loss + settings.ssim_weight * ssim_loss
             if use_ppisp:
                 loss = loss + settings.ppisp_reg_weight * ppisp_module.get_regularization_loss()
 
             loss.backward()
 
-            # Accumulate gradients for densification
-            if means.grad is not None and settings.densify_start <= step < densify_end:
-                grad_norms = means.grad.detach().norm(dim=-1)
-                visible = meta.get("gaussian_ids", None)
-                if visible is not None and len(visible) > 0:
-                    grad_accum[visible] += grad_norms[visible]
-                    grad_count[visible] += 1
-                else:
-                    # Fallback: accumulate for all gaussians
-                    grad_accum += grad_norms
-                    grad_count += 1
-
-            # Densification + pruning
-            if (
-                settings.densify_start <= step < densify_end
-                and step % settings.densify_interval == 0
-                and step > settings.densify_start
-            ):
-                if len(means) < settings.densify_max_gaussians:
-                    means, log_scales, quats, logit_opacities, sh_coeffs, optimizer, grad_accum, grad_count = (
-                        _densify(
-                            means,
-                            log_scales,
-                            quats,
-                            logit_opacities,
-                            sh_coeffs,
-                            optimizer,
-                            grad_accum,
-                            grad_count,
-                            settings.densify_grad_thresh,
-                            settings.densify_max_gaussians,
-                            split_scale_thresh,
-                        )
-                    )
-
-                # Prune near-transparent gaussians
-                alive = torch.sigmoid(logit_opacities) > 0.005
-                # Prune oversized gaussians (needle artifacts in sky)
-                max_per_gaussian = torch.exp(log_scales).max(dim=-1).values
-                alive = alive & (max_per_gaussian < max_scale_thresh)
-                if (~alive).sum() > 0 and alive.sum() > 100:
-                    n_before = len(means)
-                    means, log_scales, quats, logit_opacities, sh_coeffs, optimizer, grad_accum, grad_count = (
-                        _prune(means, log_scales, quats, logit_opacities, sh_coeffs, alive, optimizer)
-                    )
-                    logger.info("Pruned %d gaussians (transparent + oversized) (%d -> %d)", n_before - len(means), n_before, len(means))
-
-                # Opacity reset: force optimizer to re-justify each gaussian
-                if (
-                    settings.opacity_reset_interval > 0
-                    and step > 0
-                    and step % settings.opacity_reset_interval == 0
-                ):
-                    logger.info("Resetting opacities at step %d", step)
-                    logit_opacities_reset = torch.full_like(logit_opacities.data, np.log(0.01 / 0.99))
-                    logit_opacities.data.copy_(logit_opacities_reset)
-
-            optimizer.step()
+            for opt in optimizers.values():
+                opt.step()
             if use_ppisp:
                 for opt in ppisp_optimizers:
                     opt.step()
                 for sched in ppisp_schedulers:
                     sched.step()
 
-            # Clamp scales to prevent needle artifacts
-            with torch.no_grad():
-                log_scales.data.clamp_(max=log_max_scale)
+            # Densify (clone/split) + prune + opacity reset, with optimizer state
+            # migrated to match. The strategy gates this to its refine window.
+            strategy.step_post_backward(
+                params, optimizers, strategy_state, step, info, packed=False
+            )
 
             # Log SH degree activation
             if active_sh_degree > 0 and step in sh_activation_steps:
@@ -328,7 +294,10 @@ def train_gaussians(
             # Progress reporting
             if step % 50 == 0:
                 loss_val = loss.item()
-                logger.info("Step %d/%d, loss=%.4f, n_gaussians=%d, sh_degree=%d", step, max_steps, loss_val, len(means), active_sh_degree)
+                logger.info(
+                    "Step %d/%d, loss=%.4f, n_gaussians=%d, sh_degree=%d",
+                    step, max_steps, loss_val, len(params["means"]), active_sh_degree,
+                )
                 if progress_cb:
                     progress_cb(step, loss_val)
 
@@ -337,13 +306,13 @@ def train_gaussians(
         ply_path = output_dir / "output.ply"
         export_ply(
             ply_path,
-            means.detach().cpu().numpy(),
-            log_scales.detach().cpu().numpy(),
-            quats.detach().cpu().numpy(),
-            logit_opacities.detach().cpu().numpy(),
-            sh_coeffs.detach().cpu().numpy(),
+            params["means"].detach().cpu().numpy(),
+            params["scales"].detach().cpu().numpy(),
+            params["quats"].detach().cpu().numpy(),
+            params["opacities"].detach().cpu().numpy(),
+            params["sh"].detach().cpu().numpy(),
         )
-        logger.info("Exported PLY: %s (%d gaussians)", ply_path, len(means))
+        logger.info("Exported PLY: %s (%d gaussians)", ply_path, len(params["means"]))
 
         # Render a representative preview (PNG + WebP) for client thumbnails.
         # Non-fatal: a preview failure must not fail an otherwise-successful job.
@@ -351,11 +320,11 @@ def train_gaussians(
             preview_idx = n_images // 2
             _save_preview(
                 rasterization,
-                means.detach(),
-                quats.detach(),
-                torch.exp(log_scales.detach()),
-                torch.sigmoid(logit_opacities.detach()),
-                sh_coeffs.detach(),
+                params["means"].detach(),
+                params["quats"].detach(),
+                torch.exp(params["scales"].detach()),
+                torch.sigmoid(params["opacities"].detach()),
+                params["sh"].detach(),
                 w2c[preview_idx : preview_idx + 1],
                 Ks[preview_idx : preview_idx + 1],
                 img_w,
@@ -425,144 +394,6 @@ def _save_preview(
     )
     logger.info("Saved preview: %s, %s", png_path, webp_path)
     return png_path, webp_path
-
-
-def _densify(
-    means, log_scales, quats, logit_opacities, sh_coeffs,
-    optimizer, grad_accum, grad_count, grad_thresh, max_gaussians,
-    split_scale_thresh,
-):
-    """Split large / clone small Gaussians with high positional gradients."""
-    device = means.device
-    n = len(means)
-
-    # Average gradient
-    avg_grad = grad_accum / (grad_count.float() + 1e-8)
-
-    # High-gradient mask
-    high_grad = avg_grad > grad_thresh
-    if high_grad.sum() == 0:
-        grad_accum.zero_()
-        grad_count.zero_()
-        return means, log_scales, quats, logit_opacities, sh_coeffs, optimizer, grad_accum, grad_count
-
-    # Separate into split (large) vs clone (small) based on scale
-    max_scale = torch.exp(log_scales).max(dim=-1).values  # per-gaussian max scale
-    split_mask = high_grad & (max_scale > split_scale_thresh)
-    clone_mask = high_grad & ~split_mask
-
-    n_split = split_mask.sum().item()
-    n_clone = clone_mask.sum().item()
-
-    # Check budget: splits produce 2 new (replace original later via smaller scale), clones produce 1 new
-    n_new = n_split + n_clone
-    if n_new == 0 or n + n_new > max_gaussians:
-        grad_accum.zero_()
-        grad_count.zero_()
-        return means, log_scales, quats, logit_opacities, sh_coeffs, optimizer, grad_accum, grad_count
-
-    logger.info("Densifying: split %d, clone %d gaussians (total: %d -> %d)", n_split, n_clone, n, n + n_new)
-
-    new_parts = {
-        "means": [],
-        "log_scales": [],
-        "quats": [],
-        "logit_opacities": [],
-        "sh_coeffs": [],
-    }
-
-    # Clone: duplicate small gaussians as-is
-    if n_clone > 0:
-        new_parts["means"].append(means[clone_mask].detach().clone())
-        new_parts["log_scales"].append(log_scales[clone_mask].detach().clone())
-        new_parts["quats"].append(quats[clone_mask].detach().clone())
-        new_parts["logit_opacities"].append(logit_opacities[clone_mask].detach().clone())
-        new_parts["sh_coeffs"].append(sh_coeffs[clone_mask].detach().clone())
-
-    # Split: create 2 children offset from parent, shrink scale by 1.6x
-    if n_split > 0:
-        parent_means = means[split_mask].detach()
-        parent_scales = log_scales[split_mask].detach()
-        parent_quats = quats[split_mask].detach()
-        parent_opacities = logit_opacities[split_mask].detach()
-        parent_sh = sh_coeffs[split_mask].detach()
-
-        # Sample offset along gaussian's extent
-        stdev = torch.exp(parent_scales)  # (K, 3)
-        offset = torch.randn_like(stdev) * stdev
-
-        # Two children: parent ± offset, with reduced scale
-        shrink = np.log(1.6)  # reduce scale by factor of 1.6
-        for sign in [1.0, -1.0]:
-            new_parts["means"].append(parent_means + sign * offset)
-            new_parts["log_scales"].append(parent_scales - shrink)
-            new_parts["quats"].append(parent_quats.clone())
-            new_parts["logit_opacities"].append(parent_opacities.clone())
-            new_parts["sh_coeffs"].append(parent_sh.clone())
-
-        # Remove split parents by masking them out
-        keep_mask = ~split_mask
-        means = means[keep_mask].detach()
-        log_scales = log_scales[keep_mask].detach()
-        quats = quats[keep_mask].detach()
-        logit_opacities = logit_opacities[keep_mask].detach()
-        sh_coeffs = sh_coeffs[keep_mask].detach()
-
-    # Concatenate all
-    all_means = [means.detach()] + new_parts["means"]
-    all_log_scales = [log_scales.detach()] + new_parts["log_scales"]
-    all_quats = [quats.detach()] + new_parts["quats"]
-    all_logit_opacities = [logit_opacities.detach()] + new_parts["logit_opacities"]
-    all_sh_coeffs = [sh_coeffs.detach()] + new_parts["sh_coeffs"]
-
-    means = torch.cat(all_means).requires_grad_(True)
-    log_scales = torch.cat(all_log_scales).requires_grad_(True)
-    quats = torch.cat(all_quats).requires_grad_(True)
-    logit_opacities = torch.cat(all_logit_opacities).requires_grad_(True)
-    sh_coeffs = torch.cat(all_sh_coeffs).requires_grad_(True)
-
-    # Rebuild optimizer with new parameters
-    optimizer = torch.optim.Adam(
-        [
-            {"params": [means], "lr": settings.lr_means, "name": "means"},
-            {"params": [log_scales], "lr": settings.lr_scales, "name": "scales"},
-            {"params": [quats], "lr": settings.lr_quats, "name": "quats"},
-            {"params": [logit_opacities], "lr": settings.lr_opacities, "name": "opacities"},
-            {"params": [sh_coeffs], "lr": settings.lr_sh, "name": "sh"},
-        ],
-    )
-
-    # Reset accumulators
-    new_n = len(means)
-    grad_accum = torch.zeros(new_n, device=device)
-    grad_count = torch.zeros(new_n, device=device, dtype=torch.int32)
-
-    return means, log_scales, quats, logit_opacities, sh_coeffs, optimizer, grad_accum, grad_count
-
-
-def _prune(means, log_scales, quats, logit_opacities, sh_coeffs, keep_mask, optimizer):
-    """Remove gaussians where keep_mask is False."""
-    device = means.device
-    means = means[keep_mask].detach().requires_grad_(True)
-    log_scales = log_scales[keep_mask].detach().requires_grad_(True)
-    quats = quats[keep_mask].detach().requires_grad_(True)
-    logit_opacities = logit_opacities[keep_mask].detach().requires_grad_(True)
-    sh_coeffs = sh_coeffs[keep_mask].detach().requires_grad_(True)
-
-    optimizer = torch.optim.Adam(
-        [
-            {"params": [means], "lr": settings.lr_means, "name": "means"},
-            {"params": [log_scales], "lr": settings.lr_scales, "name": "scales"},
-            {"params": [quats], "lr": settings.lr_quats, "name": "quats"},
-            {"params": [logit_opacities], "lr": settings.lr_opacities, "name": "opacities"},
-            {"params": [sh_coeffs], "lr": settings.lr_sh, "name": "sh"},
-        ],
-    )
-
-    new_n = len(means)
-    grad_accum = torch.zeros(new_n, device=device)
-    grad_count = torch.zeros(new_n, device=device, dtype=torch.int32)
-    return means, log_scales, quats, logit_opacities, sh_coeffs, optimizer, grad_accum, grad_count
 
 
 def export_ply(
