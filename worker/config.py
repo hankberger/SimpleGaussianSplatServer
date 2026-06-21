@@ -25,7 +25,10 @@ class Settings(BaseSettings):
     # the joint pose optimization during training corrects residual error.
     dust3r_alignment_iters: int = 100
     dust3r_max_pairs_complete: int = 20
-    dust3r_max_points: int = 500_000
+    # Initial point-cloud size handed to training. 500k over-seeds densification
+    # (grew to ~1.7M Gaussians); ~150k is a lighter init -> fewer final Gaussians
+    # and faster training, like typical SfM-seeded 3DGS.
+    dust3r_max_points: int = 150_000
     dust3r_confidence_threshold: float = 1.5
     # Half-precision DUSt3R pairwise inference — the ViT-Large forward dominates
     # pose-estimation time, and autocast roughly halves it. bf16 is the safe
@@ -69,9 +72,11 @@ class Settings(BaseSettings):
     densify_grad_thresh: float = 0.0002
     densify_max_gaussians: int = 1_000_000
     knn_k: int = 4
-    # Densification strategy: "mcmc" (fixed Gaussian budget = faster/predictable,
-    # quality on par at a given budget) or "default" (classic grad-based growth).
-    densify_strategy: str = "mcmc"
+    # Densification strategy: "default" (classic grad-based grow/split/clone/prune)
+    # or "mcmc" (fixed budget via cap_max). MCMC injects per-step positional noise
+    # and is meant to GROW from a sparse init; our DUSt3R init is dense, so MCMC
+    # both no-ops the cap (init > cap) and distorts geometry — keep "default".
+    densify_strategy: str = "default"
     # Hard Gaussian budget for MCMC. The main speed/quality dial — lower is
     # faster. Tune against your end-of-training `n_gaussians=` count.
     mcmc_cap_max: int = 350_000
