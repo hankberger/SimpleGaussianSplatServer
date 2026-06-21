@@ -423,11 +423,29 @@ async def process_remote_job(
 def _run_frame_extraction(video_path: Path, job_dir: Path, config: JobConfig) -> list[Path]:
     from worker.pipeline.frames import extract_frames, filter_blurry_frames, normalize_video
 
-    video_path = normalize_video(video_path)
     frames_dir = job_dir / "frames"
-    frame_paths = extract_frames(
-        video_path, frames_dir, config.max_frames, config.resolution
-    )
+
+    # Extract directly from the source. ffmpeg decodes HEVC/.MOV/etc. natively,
+    # so the CPU-bound full re-encode (normalize_video) is only a fallback for
+    # inputs that won't decode or yield too few frames — avoiding a whole extra
+    # transcode pass over the file on every job.
+    try:
+        frame_paths = extract_frames(
+            video_path, frames_dir, config.max_frames, config.resolution
+        )
+        if len(frame_paths) < settings.min_frames:
+            raise RuntimeError(
+                f"only {len(frame_paths)} frames extracted (< {settings.min_frames})"
+            )
+    except Exception as e:
+        logger.warning("Direct frame extraction failed (%s); normalizing and retrying", e)
+        for f in frames_dir.glob("frame_*.png"):
+            f.unlink(missing_ok=True)
+        normalized = normalize_video(video_path)
+        frame_paths = extract_frames(
+            normalized, frames_dir, config.max_frames, config.resolution
+        )
+
     frame_paths = filter_blurry_frames(frame_paths)
     return frame_paths
 
