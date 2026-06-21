@@ -37,6 +37,7 @@ feed.get("/", optionalAuth(), async (c) => {
     like_count: row.like_count,
     comment_count: row.comment_count ?? 0,
     splat_url: `${c.env.R2_PUBLIC_URL}/${row.result_key}`,
+    preview_url: row.preview_key ? `${c.env.R2_PUBLIC_URL}/${row.preview_key}` : null,
     liked_by_me: likedPostIds.has(row.id),
   }));
 
@@ -73,6 +74,7 @@ feed.get("/me", requireAuth(), async (c) => {
     like_count: row.like_count,
     comment_count: row.comment_count ?? 0,
     splat_url: `${c.env.R2_PUBLIC_URL}/${row.result_key}`,
+    preview_url: row.preview_key ? `${c.env.R2_PUBLIC_URL}/${row.preview_key}` : null,
     liked_by_me: likedPostIds.has(row.id),
   }));
 

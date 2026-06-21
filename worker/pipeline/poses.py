@@ -4,8 +4,8 @@ from pathlib import Path
 import numpy as np
 import torch
 
-from server.config import settings
-from server.utils.gpu import force_gpu_cleanup
+from worker.config import settings
+from worker.utils.gpu import force_gpu_cleanup
 
 logger = logging.getLogger(__name__)
 

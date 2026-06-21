@@ -36,11 +36,11 @@ RUN cd dust3r/croco/models/curope/ \
     && echo "CroCo CUDA kernels built successfully" \
     || echo "CroCo CUDA kernels failed (non-fatal, will use PyTorch fallback)"
 
-# Install server dependencies (separate COPY for layer caching)
-COPY server/requirements.txt /app/server/requirements.txt
-# Install server deps; --no-build-isolation lets PPISP's CUDA extensions
+# Install worker dependencies (separate COPY for layer caching)
+COPY worker/requirements.txt /app/worker/requirements.txt
+# Install worker deps; --no-build-isolation lets PPISP's CUDA extensions
 # find the already-installed torch + CUDA toolkit at compile time.
-RUN pip install --no-cache-dir --no-build-isolation -r server/requirements.txt
+RUN pip install --no-cache-dir --no-build-isolation -r worker/requirements.txt
 
 # ==============================================================================
 # Stage 2: Runtime — lean(ish) image with everything needed to run
@@ -70,8 +70,8 @@ COPY --from=builder /app/dust3r /app/dust3r
 
 ENV PATH="/opt/venv/bin:$PATH"
 
-# Copy server source
-COPY server/ /app/server/
+# Copy worker source
+COPY worker/ /app/worker/
 
 # Environment defaults
 ENV SPLAT_JOBS_DIR=/app/jobs \
@@ -85,4 +85,4 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=120s --retries=3 \
 
 EXPOSE 8000
 
-CMD ["uvicorn", "server.app:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["uvicorn", "worker.app:app", "--host", "0.0.0.0", "--port", "8000"]

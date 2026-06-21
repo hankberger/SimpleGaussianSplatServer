@@ -12,10 +12,11 @@ if _dust3r_path not in sys.path:
     sys.path.insert(0, _dust3r_path)
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 
-from server.config import settings
-from server.models import (
+from worker.config import settings
+from worker.models import (
     HealthResponse,
     JobConfig,
     JobResponse,
@@ -24,8 +25,8 @@ from server.models import (
     OutputFormat,
     StageProgress,
 )
-from server.utils.cleanup import cleanup_job_dir, periodic_cleanup, remove_job_dir
-from server.utils.gpu import get_gpu_memory_info
+from worker.utils.cleanup import cleanup_job_dir, periodic_cleanup, remove_job_dir
+from worker.utils.gpu import get_gpu_memory_info
 
 logging.basicConfig(
     level=logging.INFO,
@@ -34,6 +35,15 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 app = FastAPI(title="SplatApp Video-to-Splat Server", version="1.0.0")
+
+# Allow browser clients (e.g. the local benchmark viewer) to call the worker
+# directly. No credentials are used, so a wildcard origin is safe here.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # In-memory job store
 jobs: dict[str, dict] = {}
@@ -50,7 +60,7 @@ async def startup():
 
     # If queue URL is configured, start polling for remote jobs
     if settings.queue_url:
-        from server.queue_client import QueueClient
+        from worker.queue_client import QueueClient
 
         queue_client = QueueClient()
         asyncio.create_task(queue_client.run(process_remote_job))
@@ -180,6 +190,21 @@ async def get_job_result(job_id: str):
         media_type=media_type,
         headers={"Content-Disposition": f'attachment; filename="{result_path.name}"'},
     )
+
+
+@app.get("/api/v1/jobs/{job_id}/preview")
+async def get_job_preview(job_id: str, format: str = "webp"):
+    """Serve the rendered scene preview. format=webp (default) or png."""
+    if job_id not in jobs:
+        raise HTTPException(404, "Job not found")
+
+    ext = "png" if format == "png" else "webp"
+    preview_path = Path(jobs[job_id]["job_dir"]) / f"preview.{ext}"
+    if not preview_path.exists():
+        raise HTTPException(404, "Preview not available")
+
+    media_type = "image/png" if ext == "png" else "image/webp"
+    return FileResponse(path=str(preview_path), media_type=media_type)
 
 
 @app.delete("/api/v1/jobs/{job_id}")
@@ -396,7 +421,7 @@ async def process_remote_job(
 
 
 def _run_frame_extraction(video_path: Path, job_dir: Path, config: JobConfig) -> list[Path]:
-    from server.pipeline.frames import extract_frames, filter_blurry_frames, normalize_video
+    from worker.pipeline.frames import extract_frames, filter_blurry_frames, normalize_video
 
     video_path = normalize_video(video_path)
     frames_dir = job_dir / "frames"
@@ -408,14 +433,14 @@ def _run_frame_extraction(video_path: Path, job_dir: Path, config: JobConfig) ->
 
 
 def _run_pose_estimation(frame_paths: list[Path], config: JobConfig):
-    from server.pipeline.poses import estimate_poses
+    from worker.pipeline.poses import estimate_poses
 
     # DUSt3R always runs at its own fixed resolution (512) for best accuracy
     return estimate_poses(frame_paths, settings.dust3r_resolution)
 
 
 def _run_training(points, colors, poses, intrinsics, frame_paths, config: JobConfig, progress_cb):
-    from server.pipeline.train import train_gaussians
+    from worker.pipeline.train import train_gaussians
 
     return train_gaussians(
         points, colors, poses, intrinsics, frame_paths,
@@ -428,7 +453,7 @@ def _run_conversion(ply_path: Path, config: JobConfig) -> Path:
     if config.output_format == OutputFormat.PLY:
         return ply_path
 
-    from server.pipeline.convert import ply_to_splat
+    from worker.pipeline.convert import ply_to_splat
 
     splat_path = ply_path.with_suffix(".splat")
     return ply_to_splat(ply_path, splat_path)

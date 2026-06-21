@@ -47,6 +47,10 @@ class Settings(BaseSettings):
     # PPISP (photometric post-processing)
     ppisp_reg_weight: float = 0.01
 
+    # Preview thumbnail (rendered after training for client previews)
+    preview_max_dim: int = 1024
+    preview_webp_quality: int = 85
+
     # Job management
     max_upload_size_mb: int = 500
     job_ttl_hours: int = 24

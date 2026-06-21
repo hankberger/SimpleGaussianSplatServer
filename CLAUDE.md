@@ -4,32 +4,32 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-SplatApp is a video-to-3D-Gaussian-Splat platform. Users upload videos from a mobile app, a FastAPI server processes them through an ML pipeline (DUSt3R pose estimation + gsplat training), and a WebGL viewer renders the resulting 3D scenes.
+SplatApp is a video-to-3D-Gaussian-Splat platform. Users upload videos from a mobile app, a FastAPI worker processes them through an ML pipeline (DUSt3R pose estimation + gsplat training), and a WebGL viewer renders the resulting 3D scenes.
 
 ## Architecture
 
 Four services work together:
 
-- **Server** (`server/`, port 8000) — FastAPI Python server that runs the GPU-intensive ML pipeline. Processes jobs through 4 stages: frame extraction (FFmpeg) → pose estimation (DUSt3R) → training (gsplat) → PLY-to-splat conversion. One GPU lock serializes all job execution. Job state is in-memory (non-persistent). When `SPLAT_QUEUE_URL` is set, it polls the render-queue for remote jobs instead of accepting direct uploads.
+- **Worker** (`worker/`, port 8000) — FastAPI Python worker that runs the GPU-intensive ML pipeline. Processes jobs through 4 stages: frame extraction (FFmpeg) → pose estimation (DUSt3R) → training (gsplat) → PLY-to-splat conversion. One GPU lock serializes all job execution. Job state is in-memory (non-persistent). When `SPLAT_QUEUE_URL` is set, it polls the render-queue for remote jobs instead of accepting direct uploads.
 
-- **Render Queue** (`render-queue/`, Cloudflare Worker) — Hono.js TypeScript worker providing the public API. Stores videos/results in R2, job metadata in D1 (SQLite). Handles user auth (email + OAuth via JWT), job queuing, and the recommendation feed. The GPU server polls `/api/v1/worker/claim` to pick up jobs.
+- **Render Queue** (`render-queue/`, Cloudflare Worker) — Hono.js TypeScript worker providing the public API. Stores videos/results in R2, job metadata in D1 (SQLite). Handles user auth (email + OAuth via JWT), job queuing, and the recommendation feed. The GPU worker polls `/api/v1/worker/claim` to pick up jobs.
 
-- **Web Viewer** (`web-viewer/`, port 9000) — Express.js static server hosting a WebGL Gaussian splat renderer (fork of antimatter15/splat). Loads splats via `?url=/jobs/{id}/output.splat`. No external JS dependencies.
+- **Web Viewer** (`web-viewer/`, port 9000) — Static WebGL Gaussian splat renderer (fork of antimatter15/splat), deployed to Cloudflare Pages. `index.html` loads splats via `?url=<splat_url>`. `benchmark.html` is a standalone dev tool that uploads a video straight to the worker, polls/times the pipeline stages, shows the rendered preview, and opens the result in `index.html`. No external JS dependencies.
 
 - **Mobile App** (`mobile/`) — Expo SDK 54 React Native app with camera recording, video upload, job status polling, feed browsing, and likes. Three context providers: AuthContext (JWT in SecureStore), JobContext (polling), FeedContext (paginated feed).
 
 ### Data Flow
 
 ```
-Mobile → Render Queue (R2 storage) → Server polls & claims job → Processes on GPU → Uploads result to R2 → Mobile/Web Viewer loads .splat
+Mobile → Render Queue (R2 storage) → Worker polls & claims job → Processes on GPU → Uploads result to R2 → Mobile/Web Viewer loads .splat
 ```
 
 ## Common Commands
 
-### Server
+### Worker
 ```bash
 conda activate splatapp
-uvicorn server.app:app --host 0.0.0.0 --port 8000
+uvicorn worker.app:app --host 0.0.0.0 --port 8000
 ```
 
 ### Web Viewer
@@ -62,12 +62,13 @@ curl http://localhost:8000/api/v1/jobs/<job_id>
 
 - `POST /api/v1/jobs` — FormData with `video` field + optional `training_iterations`, `resolution`, `max_frames`, `output_format`. Returns `{ job_id, status, message }`.
 - `GET /api/v1/jobs/{id}` — Returns `{ job_id, status, stages[], error }`. Stages: `frame_extraction`, `pose_estimation`, `training`, `conversion`. Training detail format: `"step X/Y, loss=Z"`.
-- Render queue worker routes (`/api/v1/worker/*`) use `WORKER_API_KEY` header auth.
+- `GET /api/v1/jobs/{id}/preview` — After training, the worker renders a representative view and saves `preview.png` + `preview.webp`. Serves the WebP by default (`?format=png` for PNG). In queue mode these are uploaded to R2 (`jobs/{id}/preview.webp`) and surfaced as `preview_url` on the job status and feed items.
+- Render queue worker routes (`/api/v1/worker/*`) use `WORKER_API_KEY` header auth, including `PUT /api/v1/worker/jobs/{id}/preview?format=webp|png` for the worker to upload previews.
 - User auth uses JWT Bearer tokens (30-day expiry).
 
 ## Configuration
 
-Server settings use `SPLAT_` prefixed env vars (see `server/config.py`). Key ones:
+Worker settings use `SPLAT_` prefixed env vars (see `worker/config.py`). Key ones:
 - `SPLAT_QUEUE_URL` / `SPLAT_QUEUE_API_KEY` — connect to render queue
 - `SPLAT_GPU_DEVICE`, `SPLAT_MAX_GPU_MEMORY_FRACTION` — GPU control
 - `SPLAT_JOBS_DIR` — job artifact storage (default: `./jobs`)
@@ -87,14 +88,14 @@ Mobile config is in `mobile/src/config.js` — hardcoded `API_BASE` (Cloudflare 
 
 ## Database (D1)
 
-Schema lives in `render-queue/migrations/` (5 migration files). Key tables:
-- `jobs` — status enum: `queued` → `claimed` → `processing` → `completed`/`failed`
+Schema lives in `render-queue/migrations/` (numbered `0001`+). Apply with the `migrate:remote:vN` npm scripts. Key tables:
+- `jobs` — status enum: `queued` → `claimed` → `processing` → `completed`/`failed`. Has `result_key` and `preview_key` (R2 keys).
 - `users` — email/password (argon2) + OAuth (Google/Apple)
 - `likes` — many-to-many (user_id, job_id)
 
 ## Pipeline Details
 
-The ML pipeline in `server/pipeline/` is the core of the project:
+The ML pipeline in `worker/pipeline/` is the core of the project:
 - `frames.py` — FFmpeg scene-change keyframe extraction + OpenCV Laplacian blur filtering
 - `poses.py` — DUSt3R ViT-Large model (cached globally after first load, ~3.5GB). Returns camera poses (N,4,4), intrinsics, point cloud, colors.
 - `train.py` — gsplat Gaussian optimization. Loss: SSIM + L1 + L2 regularization. Densification via gradient-based splitting/cloning.

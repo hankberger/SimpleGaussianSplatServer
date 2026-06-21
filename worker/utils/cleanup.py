@@ -4,7 +4,7 @@ import shutil
 import time
 from pathlib import Path
 
-from server.config import settings
+from worker.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -14,7 +14,8 @@ def cleanup_job_dir(job_dir: Path, keep_result: bool = True):
     if not job_dir.exists():
         return
     for item in job_dir.iterdir():
-        if keep_result and item.suffix in (".splat", ".ply"):
+        # Keep the result splat/ply and the rendered preview thumbnails
+        if keep_result and item.suffix in (".splat", ".ply", ".png", ".webp"):
             continue
         if item.is_dir():
             shutil.rmtree(item, ignore_errors=True)

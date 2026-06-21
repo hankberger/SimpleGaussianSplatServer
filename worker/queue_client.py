@@ -12,8 +12,8 @@ from pathlib import Path
 
 import httpx
 
-from server.config import settings
-from server.models import JobConfig, OutputFormat
+from worker.config import settings
+from worker.models import JobConfig, OutputFormat
 
 logger = logging.getLogger(__name__)
 
@@ -94,7 +94,10 @@ class QueueClient:
                 job_id, video_path, job_dir, job_config, stages, report_stages
             )
 
-            # Upload result
+            # Upload preview thumbnails first, then the result. The result
+            # upload creates the feed post, which copies the job's preview_key,
+            # so the preview must be registered beforehand.
+            await self._upload_preview(job_id, job_dir)
             await self._upload_result(job_id, result_path)
             logger.info("Job %s completed and uploaded", job_id)
 
@@ -139,6 +142,28 @@ class QueueClient:
                 resp.raise_for_status()
         except Exception:
             logger.warning("Failed to update status for job %s", job_id, exc_info=True)
+
+    async def _upload_preview(self, job_id: str, job_dir: Path):
+        """Upload rendered preview thumbnails (webp + png) to the Worker's R2."""
+        for ext in ("webp", "png"):
+            preview_path = job_dir / f"preview.{ext}"
+            if not preview_path.exists():
+                continue
+            try:
+                async with httpx.AsyncClient() as client:
+                    with open(preview_path, "rb") as f:
+                        resp = await client.put(
+                            f"{self.base_url}/api/v1/worker/jobs/{job_id}/preview?format={ext}",
+                            headers=self.headers,
+                            content=f.read(),
+                            timeout=60,
+                        )
+                        resp.raise_for_status()
+                logger.info("Uploaded %s preview for job %s", ext, job_id)
+            except Exception:
+                logger.warning(
+                    "Failed to upload %s preview for job %s", ext, job_id, exc_info=True
+                )
 
     async def _upload_result(self, job_id: str, result_path: Path):
         """Upload the .splat/.ply result to the Worker's R2 storage."""

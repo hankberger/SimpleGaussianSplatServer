@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import type { Env, StageProgress } from "../types";
 import { workerAuth } from "../middleware/auth";
-import { claimOldestJob, getJob, updateJobStatus, setJobResultKey } from "../db/queries";
+import { claimOldestJob, getJob, updateJobStatus, setJobResultKey, setJobPreviewKey } from "../db/queries";
 
 const worker = new Hono<{ Bindings: Env }>();
 
@@ -81,6 +81,32 @@ worker.put("/jobs/:id/status", async (c) => {
   }
 
   return c.json({ ok: true });
+});
+
+// PUT /api/v1/worker/jobs/:id/preview?format=webp|png — Upload a preview image to R2
+worker.put("/jobs/:id/preview", async (c) => {
+  const jobId = c.req.param("id");
+  const job = await getJob(c.env.DB, jobId);
+
+  if (!job) {
+    return c.json({ error: "Job not found" }, 404);
+  }
+
+  const format = c.req.query("format") === "png" ? "png" : "webp";
+  const previewKey = `jobs/${jobId}/preview.${format}`;
+  const contentType = format === "png" ? "image/png" : "image/webp";
+
+  // Stream the request body directly to R2
+  await c.env.ASSETS.put(previewKey, c.req.raw.body, {
+    httpMetadata: { contentType },
+  });
+
+  // The WebP is the canonical (compact) preview clients fetch.
+  if (format === "webp") {
+    await setJobPreviewKey(c.env.DB, jobId, previewKey);
+  }
+
+  return c.json({ ok: true, preview_key: previewKey });
 });
 
 // PUT /api/v1/worker/jobs/:id/result — Upload .splat result to R2

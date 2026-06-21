@@ -8,8 +8,8 @@ import torch
 import torch.nn.functional as F
 from torchmetrics.image import StructuralSimilarityIndexMeasure
 
-from server.config import settings
-from server.utils.gpu import force_gpu_cleanup, gpu_memory_guard
+from worker.config import settings
+from worker.utils.gpu import force_gpu_cleanup, gpu_memory_guard
 
 logger = logging.getLogger(__name__)
 
@@ -343,7 +343,86 @@ def train_gaussians(
             sh_coeffs.detach().cpu().numpy(),
         )
         logger.info("Exported PLY: %s (%d gaussians)", ply_path, len(means))
+
+        # Render a representative preview (PNG + WebP) for client thumbnails.
+        # Non-fatal: a preview failure must not fail an otherwise-successful job.
+        try:
+            preview_idx = n_images // 2
+            _save_preview(
+                rasterization,
+                means.detach(),
+                quats.detach(),
+                torch.exp(log_scales.detach()),
+                torch.sigmoid(logit_opacities.detach()),
+                sh_coeffs.detach(),
+                w2c[preview_idx : preview_idx + 1],
+                Ks[preview_idx : preview_idx + 1],
+                img_w,
+                img_h,
+                sh_degree_max,
+                output_dir,
+            )
+        except Exception:
+            logger.warning("Preview render failed (non-fatal)", exc_info=True)
+
         return ply_path
+
+
+def _save_preview(
+    rasterization,
+    means: torch.Tensor,
+    quats: torch.Tensor,
+    scales: torch.Tensor,
+    opacities: torch.Tensor,
+    sh_coeffs: torch.Tensor,
+    viewmat: torch.Tensor,
+    K: torch.Tensor,
+    img_w: int,
+    img_h: int,
+    sh_degree: int,
+    output_dir: Path,
+) -> tuple[Path, Path]:
+    """Render one representative view of the trained scene and save it as a
+    lossless PNG and a compact WebP, so clients can preview a scene without
+    downloading the full splat. Uses OpenCV (already a dependency) for encoding.
+    """
+    import cv2
+
+    with torch.no_grad():
+        renders, _, _ = rasterization(
+            means=means,
+            quats=quats / (quats.norm(dim=-1, keepdim=True) + 1e-8),
+            scales=scales,
+            opacities=opacities,
+            colors=sh_coeffs,
+            viewmats=viewmat,
+            Ks=K,
+            width=img_w,
+            height=img_h,
+            packed=False,
+            sh_degree=sh_degree,
+        )
+
+    # (1, H, W, 3) RGB float -> (H, W, 3) uint8
+    img = renders[0].clamp(0.0, 1.0).cpu().numpy()
+    img = (img * 255.0 + 0.5).astype(np.uint8)
+
+    # Downscale so the longest side fits preview_max_dim (keeps previews small)
+    max_dim = settings.preview_max_dim
+    h, w = img.shape[:2]
+    if max(h, w) > max_dim:
+        s = max_dim / max(h, w)
+        img = cv2.resize(img, (int(w * s), int(h * s)), interpolation=cv2.INTER_AREA)
+
+    bgr = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
+    png_path = output_dir / "preview.png"
+    webp_path = output_dir / "preview.webp"
+    cv2.imwrite(str(png_path), bgr)
+    cv2.imwrite(
+        str(webp_path), bgr, [cv2.IMWRITE_WEBP_QUALITY, settings.preview_webp_quality]
+    )
+    logger.info("Saved preview: %s, %s", png_path, webp_path)
+    return png_path, webp_path
 
 
 def _densify(

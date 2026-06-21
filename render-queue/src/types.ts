@@ -32,6 +32,7 @@ export interface JobRow {
   resolution: number;
   video_key: string | null;
   result_key: string | null;
+  preview_key: string | null;
   stages: string; // JSON array of StageProgress
   error: string | null;
   view_count: number;
@@ -43,6 +44,7 @@ export interface PostRow {
   id: string;
   user_id: string | null;
   result_key: string;
+  preview_key: string | null;
   output_format: string;
   title: string | null;
   description: string | null;
@@ -67,6 +69,7 @@ export interface JobStatusResponse {
   stages: StageProgress[];
   error: string | null;
   result_format: string | null;
+  preview_url: string | null;
 }
 
 export interface JobCreateResponse {
@@ -87,6 +90,7 @@ export interface FeedItem {
   like_count: number;
   comment_count: number;
   splat_url: string;
+  preview_url: string | null;
   liked_by_me: boolean;
 }
 

@@ -18,9 +18,9 @@ Video-to-Gaussian-Splat pipeline with a WebGL viewer. Upload a video, get back a
 ```bash
 git clone https://github.com/hankberger/SimpleGaussianSplatServer.git
 cd SimpleGaussianSplatServer
-bash setup_env.sh
+bash worker/setup_env.sh
 conda activate splatapp
-uvicorn server.app:app --host 0.0.0.0 --port 8000
+uvicorn worker.app:app --host 0.0.0.0 --port 8000
 ```
 
 ### Option B: Manual setup
@@ -47,7 +47,7 @@ pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
 
 #### 4. Install DUSt3R
 
-DUSt3R must be cloned into the repo root (the server expects it at `./dust3r/`):
+DUSt3R must be cloned into the repo root (the worker expects it at `./dust3r/`):
 
 ```bash
 git clone --recursive https://github.com/naver/dust3r.git
@@ -63,11 +63,11 @@ python setup.py build_ext --inplace
 cd ../../../..
 ```
 
-#### 5. Install gsplat and server dependencies
+#### 5. Install gsplat and worker dependencies
 
 ```bash
 pip install gsplat
-pip install -r server/requirements.txt
+pip install -r worker/requirements.txt
 ```
 
 #### 6. Install FFmpeg
@@ -99,11 +99,11 @@ ffmpeg -version | head -1
 
 ## Running
 
-### 1. Start the processing server
+### 1. Start the processing worker
 
 ```bash
 conda activate splatapp
-uvicorn server.app:app --host 0.0.0.0 --port 8000
+uvicorn worker.app:app --host 0.0.0.0 --port 8000
 ```
 
 The first job will be slow as DUSt3R downloads and caches its model weights (~3.5 GB).
@@ -118,6 +118,15 @@ npm start
 ```
 
 The renderer runs at **http://localhost:9000**.
+
+### Benchmark viewer (optional)
+
+`web-viewer/benchmark.html` is a standalone page for benchmarking the worker:
+open it in a browser (it can be served statically or opened directly), point it
+at the worker URL (default `http://localhost:8000`), upload a video, and it will
+poll and time each pipeline stage, show the rendered preview, and open the
+finished splat in the 3D viewer. The worker enables CORS so the browser can call
+it directly.
 
 ### 3. Submit a video
 
@@ -226,7 +235,7 @@ See [`renderer/README.md`](renderer/README.md) for full controls.
 
 ```
 SimpleGaussianSplatServer/
-├── server/                  # FastAPI processing server
+├── worker/                  # FastAPI processing worker
 │   ├── app.py               # API endpoints + job orchestration
 │   ├── config.py            # Settings (env var overrides)
 │   ├── models.py            # Request/response schemas
@@ -235,14 +244,18 @@ SimpleGaussianSplatServer/
 │   │   ├── poses.py         # DUSt3R pose estimation
 │   │   ├── train.py         # gsplat 3DGS training
 │   │   └── convert.py       # PLY → .splat conversion
-│   └── utils/
-│       ├── gpu.py            # GPU memory management
-│       └── cleanup.py        # Job artifact cleanup
+│   ├── utils/
+│   │   ├── gpu.py            # GPU memory management
+│   │   └── cleanup.py        # Job artifact cleanup
+│   ├── setup_env.sh         # Automated conda environment setup
+│   ├── build.sh             # Build the worker Docker image
+│   └── run.sh               # Run the worker Docker image (GPU)
 ├── renderer/                # WebGL viewer (antimatter15/splat)
 │   ├── index.html
 │   ├── main.js
 │   └── server.js            # Express static server
 ├── dust3r/                  # DUSt3R (cloned during setup, not in repo)
-├── setup_env.sh             # Automated environment setup
+├── Dockerfile               # Multi-stage build for the worker
+├── docker-compose.yml       # Worker service (GPU, volumes)
 └── README.md
 ```

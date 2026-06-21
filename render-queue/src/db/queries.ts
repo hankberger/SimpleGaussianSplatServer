@@ -89,6 +89,22 @@ export async function updateJobStatus(
   return result.meta.changes > 0;
 }
 
+export async function setJobPreviewKey(
+  db: D1Database,
+  id: string,
+  previewKey: string
+): Promise<boolean> {
+  const result = await db
+    .prepare(
+      `UPDATE jobs SET preview_key = ?,
+       updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+       WHERE id = ?`
+    )
+    .bind(previewKey, id)
+    .run();
+  return result.meta.changes > 0;
+}
+
 export async function setJobResultKey(
   db: D1Database,
   id: string,
@@ -106,17 +122,17 @@ export async function setJobResultKey(
   if (result.meta.changes > 0) {
     // Create a corresponding post row
     const job = await db
-      .prepare("SELECT id, user_id, output_format FROM jobs WHERE id = ?")
+      .prepare("SELECT id, user_id, output_format, preview_key FROM jobs WHERE id = ?")
       .bind(id)
-      .first<{ id: string; user_id: string | null; output_format: string }>();
+      .first<{ id: string; user_id: string | null; output_format: string; preview_key: string | null }>();
 
     if (job) {
       await db
         .prepare(
-          `INSERT INTO posts (id, user_id, result_key, output_format)
-           VALUES (?, ?, ?, ?)`
+          `INSERT INTO posts (id, user_id, result_key, preview_key, output_format)
+           VALUES (?, ?, ?, ?, ?)`
         )
-        .bind(job.id, job.user_id, resultKey, job.output_format)
+        .bind(job.id, job.user_id, resultKey, job.preview_key, job.output_format)
         .run();
     }
     return true;

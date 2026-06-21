@@ -68,9 +68,30 @@ jobs.get("/:id", async (c) => {
     stages: JSON.parse(job.stages),
     error: job.error,
     result_format: job.status === "completed" ? job.output_format : null,
+    preview_url: job.preview_key ? `${c.env.R2_PUBLIC_URL}/${job.preview_key}` : null,
   };
 
   return c.json(response);
+});
+
+// GET /api/v1/jobs/:id/preview — Stream the scene preview image from R2
+jobs.get("/:id/preview", async (c) => {
+  const jobId = c.req.param("id");
+  const job = await getJob(c.env.DB, jobId);
+
+  if (!job || !job.preview_key) {
+    return c.json({ error: "Preview not found" }, 404);
+  }
+
+  const object = await c.env.ASSETS.get(job.preview_key);
+  if (!object) {
+    return c.json({ error: "Preview not found in storage" }, 404);
+  }
+
+  const contentType = job.preview_key.endsWith(".png") ? "image/png" : "image/webp";
+  return new Response(object.body, {
+    headers: { "Content-Type": contentType },
+  });
 });
 
 // GET /api/v1/jobs/:id/result — Stream .splat from R2

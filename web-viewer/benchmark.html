@@ -1,0 +1,342 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Splat Worker Benchmark</title>
+    <style>
+      :root {
+        --bg: #0d0f12;
+        --panel: #161a20;
+        --border: #272d36;
+        --text: #e6e9ee;
+        --muted: #8b94a3;
+        --accent: #4c8dff;
+        --ok: #3fb950;
+        --run: #d29922;
+        --fail: #f85149;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+        background: var(--bg);
+        color: var(--text);
+        line-height: 1.45;
+      }
+      header {
+        padding: 18px 24px;
+        border-bottom: 1px solid var(--border);
+        display: flex;
+        align-items: baseline;
+        gap: 12px;
+      }
+      header h1 { font-size: 18px; margin: 0; }
+      header span { color: var(--muted); font-size: 13px; }
+      main {
+        max-width: 1100px;
+        margin: 0 auto;
+        padding: 24px;
+        display: grid;
+        grid-template-columns: 360px 1fr;
+        gap: 24px;
+        align-items: start;
+      }
+      @media (max-width: 820px) { main { grid-template-columns: 1fr; } }
+      .panel {
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        padding: 18px;
+      }
+      .panel h2 { font-size: 14px; margin: 0 0 14px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+      label { display: block; font-size: 13px; color: var(--muted); margin: 12px 0 4px; }
+      input[type="text"], input[type="number"], select, input[type="file"] {
+        width: 100%;
+        background: #0d1117;
+        border: 1px solid var(--border);
+        color: var(--text);
+        border-radius: 6px;
+        padding: 8px 10px;
+        font-size: 14px;
+      }
+      .row { display: flex; gap: 10px; }
+      .row > div { flex: 1; }
+      button {
+        margin-top: 16px;
+        width: 100%;
+        background: var(--accent);
+        color: #fff;
+        border: none;
+        border-radius: 6px;
+        padding: 11px;
+        font-size: 14px;
+        font-weight: 600;
+        cursor: pointer;
+      }
+      button:disabled { opacity: .5; cursor: not-allowed; }
+      button.secondary { background: #21262d; }
+      .stages { list-style: none; padding: 0; margin: 0; }
+      .stages li {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 10px 0;
+        border-bottom: 1px solid var(--border);
+        font-size: 14px;
+      }
+      .stages li:last-child { border-bottom: none; }
+      .stage-name { display: flex; align-items: center; gap: 8px; }
+      .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--muted); flex: none; }
+      .dot.running { background: var(--run); animation: pulse 1s infinite; }
+      .dot.completed { background: var(--ok); }
+      .dot.failed { background: var(--fail); }
+      @keyframes pulse { 50% { opacity: .35; } }
+      .detail { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+      .dur { color: var(--text); font-variant-numeric: tabular-nums; min-width: 64px; text-align: right; }
+      .status-line { font-size: 13px; color: var(--muted); margin: 4px 0 14px; font-variant-numeric: tabular-nums; }
+      .preview { margin-top: 16px; }
+      .preview img { width: 100%; border-radius: 8px; border: 1px solid var(--border); display: block; }
+      .actions { display: flex; gap: 10px; }
+      .actions button { flex: 1; }
+      table { width: 100%; border-collapse: collapse; margin-top: 8px; font-size: 13px; }
+      th, td { text-align: right; padding: 6px 8px; border-bottom: 1px solid var(--border); font-variant-numeric: tabular-nums; }
+      th:first-child, td:first-child { text-align: left; }
+      th { color: var(--muted); font-weight: 600; }
+      .err { color: var(--fail); font-size: 13px; margin-top: 10px; white-space: pre-wrap; }
+      .hint { color: var(--muted); font-size: 12px; margin-top: 6px; }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>Splat Worker Benchmark</h1>
+      <span>upload a video &rarr; train &rarr; view &amp; time the pipeline</span>
+    </header>
+    <main>
+      <section class="panel">
+        <h2>Job</h2>
+        <label for="worker">Worker URL</label>
+        <input type="text" id="worker" placeholder="http://localhost:8000" />
+
+        <label for="video">Video file</label>
+        <input type="file" id="video" accept="video/*" />
+
+        <div class="row">
+          <div>
+            <label for="iters">Training iterations</label>
+            <input type="number" id="iters" value="7000" min="1000" max="30000" step="500" />
+          </div>
+          <div>
+            <label for="frames">Max frames</label>
+            <input type="number" id="frames" value="40" min="8" max="80" />
+          </div>
+        </div>
+        <div class="row">
+          <div>
+            <label for="res">Resolution</label>
+            <input type="number" id="res" value="768" min="256" max="1920" step="64" />
+          </div>
+          <div>
+            <label for="format">Output</label>
+            <select id="format">
+              <option value="splat">splat</option>
+              <option value="ply">ply</option>
+            </select>
+          </div>
+        </div>
+
+        <button id="start">Start job</button>
+        <div class="hint">Calls the worker's <code>/api/v1/jobs</code> directly (no render-queue).</div>
+        <div class="err" id="error" hidden></div>
+      </section>
+
+      <section>
+        <div class="panel">
+          <h2>Progress</h2>
+          <div class="status-line" id="statusLine">Idle.</div>
+          <ul class="stages" id="stages"></ul>
+          <div class="preview" id="previewWrap" hidden>
+            <img id="previewImg" alt="scene preview" />
+            <div class="actions">
+              <button class="secondary" id="openViewer">Open splat in 3D viewer</button>
+              <button class="secondary" id="downloadResult">Download result</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="panel" style="margin-top: 24px;">
+          <h2>Benchmark history</h2>
+          <table id="history">
+            <thead>
+              <tr>
+                <th>Job</th><th>Iters</th><th>Frames</th><th>Res</th>
+                <th>Frames</th><th>Poses</th><th>Train</th><th>Convert</th><th>Total</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+          <div class="hint">Stage times are poll-sampled (~1s granularity), good for relative comparison.</div>
+        </div>
+      </section>
+    </main>
+
+    <script>
+      const $ = (id) => document.getElementById(id);
+      const STAGES = ["frame_extraction", "pose_estimation", "training", "conversion"];
+      const STAGE_LABEL = {
+        frame_extraction: "Frame extraction",
+        pose_estimation: "Pose estimation",
+        training: "Training",
+        conversion: "Conversion",
+      };
+
+      // Persist worker URL between sessions
+      $("worker").value = localStorage.getItem("benchWorkerUrl") || "http://localhost:8000";
+      $("worker").addEventListener("change", () =>
+        localStorage.setItem("benchWorkerUrl", $("worker").value.trim())
+      );
+
+      const fmt = (ms) => (ms == null ? "—" : (ms / 1000).toFixed(1) + "s");
+      const workerBase = () => $("worker").value.trim().replace(/\/$/, "");
+
+      function renderStages(stages, durations) {
+        const ul = $("stages");
+        ul.innerHTML = "";
+        for (const name of STAGES) {
+          const s = stages.find((x) => x.name === name) || { status: "pending" };
+          const li = document.createElement("li");
+          li.innerHTML = `
+            <span class="stage-name"><span class="dot ${s.status}"></span>${STAGE_LABEL[name]}</span>
+            <span class="detail">${s.detail || ""}</span>
+            <span class="dur">${fmt(durations[name])}</span>`;
+          ul.appendChild(li);
+        }
+      }
+
+      let polling = false;
+
+      async function start() {
+        if (polling) return;
+        const file = $("video").files[0];
+        if (!file) return showError("Pick a video file first.");
+        showError(null);
+
+        const cfg = {
+          training_iterations: $("iters").value,
+          max_frames: $("frames").value,
+          resolution: $("res").value,
+          output_format: $("format").value,
+        };
+
+        const fd = new FormData();
+        fd.append("video", file);
+        for (const [k, v] of Object.entries(cfg)) fd.append(k, v);
+
+        $("start").disabled = true;
+        $("previewWrap").hidden = true;
+        polling = true;
+
+        let jobId;
+        const t0 = performance.now();
+        try {
+          const res = await fetch(workerBase() + "/api/v1/jobs", { method: "POST", body: fd });
+          if (!res.ok) throw new Error("POST /jobs failed: " + res.status + " " + (await res.text()));
+          jobId = (await res.json()).job_id;
+        } catch (e) {
+          polling = false;
+          $("start").disabled = false;
+          return showError(String(e));
+        }
+
+        // Poll status, sampling stage-completion times.
+        const durations = {};
+        const completedAt = {};
+        let lastCompletedCount = 0;
+        const tick = async () => {
+          const elapsed = performance.now() - t0;
+          let job;
+          try {
+            const r = await fetch(workerBase() + "/api/v1/jobs/" + jobId);
+            if (!r.ok) throw new Error("status " + r.status);
+            job = await r.json();
+          } catch (e) {
+            $("statusLine").textContent = "Polling error: " + e + " (retrying)";
+            return setTimeout(tick, 1500);
+          }
+
+          // Compute per-stage durations from completion timestamps
+          let prevEnd = 0;
+          let nowDoneCount = 0;
+          for (const name of STAGES) {
+            const s = job.stages.find((x) => x.name === name);
+            if (s && s.status === "completed") {
+              if (completedAt[name] == null) completedAt[name] = elapsed;
+              durations[name] = completedAt[name] - prevEnd;
+              prevEnd = completedAt[name];
+              nowDoneCount++;
+            }
+          }
+          lastCompletedCount = nowDoneCount;
+
+          renderStages(job.stages, durations);
+          $("statusLine").textContent =
+            `Job ${jobId} · ${job.status} · ${(elapsed / 1000).toFixed(0)}s elapsed`;
+
+          if (job.status === "completed") {
+            durations.__total = elapsed;
+            return finish(jobId, durations, cfg, job);
+          }
+          if (job.status === "failed") {
+            polling = false;
+            $("start").disabled = false;
+            return showError("Job failed: " + (job.error || "unknown error"));
+          }
+          setTimeout(tick, 1200);
+        };
+        tick();
+      }
+
+      function finish(jobId, durations, cfg, job) {
+        polling = false;
+        $("start").disabled = false;
+
+        const resultUrl = workerBase() + "/api/v1/jobs/" + jobId + "/result";
+        const previewUrl = workerBase() + "/api/v1/jobs/" + jobId + "/preview";
+
+        // Preview image (worker renders webp by default)
+        $("previewImg").src = previewUrl + "?t=" + Date.now();
+        $("previewImg").onerror = () => ($("previewWrap").querySelector("img").style.display = "none");
+        $("previewWrap").hidden = false;
+
+        $("openViewer").onclick = () => {
+          // The renderer (index.html) fetches the splat cross-origin from the worker.
+          window.open("index.html?url=" + encodeURIComponent(resultUrl), "_blank");
+        };
+        $("downloadResult").onclick = () => window.open(resultUrl, "_blank");
+
+        // Append to benchmark history
+        const tr = document.createElement("tr");
+        tr.innerHTML = `
+          <td>${jobId}</td>
+          <td>${cfg.training_iterations}</td>
+          <td>${cfg.max_frames}</td>
+          <td>${cfg.resolution}</td>
+          <td>${fmt(durations.frame_extraction)}</td>
+          <td>${fmt(durations.pose_estimation)}</td>
+          <td>${fmt(durations.training)}</td>
+          <td>${fmt(durations.conversion)}</td>
+          <td><b>${fmt(durations.__total)}</b></td>`;
+        $("history").querySelector("tbody").prepend(tr);
+      }
+
+      function showError(msg) {
+        const el = $("error");
+        if (!msg) return (el.hidden = true);
+        el.hidden = false;
+        el.textContent = msg;
+      }
+
+      $("start").addEventListener("click", start);
+    </script>
+  </body>
+</html>
