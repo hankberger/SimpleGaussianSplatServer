@@ -165,8 +165,11 @@
         </div>
 
         <div class="panel" style="margin-top: 24px;">
-          <h2>Benchmark history</h2>
-          <table id="history">
+          <div style="display:flex; align-items:center; justify-content:space-between;">
+            <h2 style="margin:0;">Benchmark history</h2>
+            <button id="clearHistory" class="secondary" style="width:auto; margin:0; padding:6px 12px; font-size:12px;">Clear</button>
+          </div>
+          <table id="history" style="margin-top:14px;">
             <thead>
               <tr>
                 <th>Job</th><th>Iters</th><th>Frames</th><th>Res</th>
@@ -198,6 +201,54 @@
 
       const fmt = (ms) => (ms == null ? "—" : (ms / 1000).toFixed(1) + "s");
       const workerBase = () => $("worker").value.trim().replace(/\/$/, "");
+
+      // --- Benchmark history (persisted in localStorage) ---
+      const HISTORY_KEY = "benchHistory";
+
+      function loadHistory() {
+        try {
+          return JSON.parse(localStorage.getItem(HISTORY_KEY)) || [];
+        } catch {
+          return [];
+        }
+      }
+
+      function historyRowHtml(r) {
+        return `
+          <td>${r.jobId}</td>
+          <td>${r.iters}</td>
+          <td>${r.frames}</td>
+          <td>${r.res}</td>
+          <td>${fmt(r.frame_extraction)}</td>
+          <td>${fmt(r.pose_estimation)}</td>
+          <td>${fmt(r.training)}</td>
+          <td>${fmt(r.conversion)}</td>
+          <td><b>${fmt(r.total)}</b></td>`;
+      }
+
+      function renderHistory() {
+        const tbody = $("history").querySelector("tbody");
+        tbody.innerHTML = "";
+        for (const r of loadHistory()) {
+          const tr = document.createElement("tr");
+          tr.innerHTML = historyRowHtml(r);
+          tbody.appendChild(tr); // newest first (we unshift on save)
+        }
+      }
+
+      function addHistory(record) {
+        const hist = loadHistory();
+        hist.unshift(record);
+        localStorage.setItem(HISTORY_KEY, JSON.stringify(hist.slice(0, 200)));
+        renderHistory();
+      }
+
+      $("clearHistory").addEventListener("click", () => {
+        localStorage.removeItem(HISTORY_KEY);
+        renderHistory();
+      });
+
+      renderHistory(); // restore on page load
 
       function renderStages(stages, durations) {
         const ul = $("stages");
@@ -314,19 +365,18 @@
         };
         $("downloadResult").onclick = () => window.open(resultUrl, "_blank");
 
-        // Append to benchmark history
-        const tr = document.createElement("tr");
-        tr.innerHTML = `
-          <td>${jobId}</td>
-          <td>${cfg.training_iterations}</td>
-          <td>${cfg.max_frames}</td>
-          <td>${cfg.resolution}</td>
-          <td>${fmt(durations.frame_extraction)}</td>
-          <td>${fmt(durations.pose_estimation)}</td>
-          <td>${fmt(durations.training)}</td>
-          <td>${fmt(durations.conversion)}</td>
-          <td><b>${fmt(durations.__total)}</b></td>`;
-        $("history").querySelector("tbody").prepend(tr);
+        // Persist to benchmark history (survives refreshes via localStorage)
+        addHistory({
+          jobId,
+          iters: cfg.training_iterations,
+          frames: cfg.max_frames,
+          res: cfg.resolution,
+          frame_extraction: durations.frame_extraction,
+          pose_estimation: durations.pose_estimation,
+          training: durations.training,
+          conversion: durations.conversion,
+          total: durations.__total,
+        });
       }
 
       function showError(msg) {
