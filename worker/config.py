@@ -47,6 +47,12 @@ class Settings(BaseSettings):
     densify_max_gaussians: int = 1_000_000
     knn_k: int = 4
 
+    # Camera pose optimization — refine the approximate DUSt3R poses jointly
+    # with the Gaussians via a learnable per-camera SE(3) correction.
+    pose_opt_enabled: bool = True
+    pose_opt_lr: float = 1e-5
+    pose_opt_start: int = 500  # warm up Gaussians before correcting poses
+
     # PPISP (photometric post-processing)
     ppisp_reg_weight: float = 0.01
 

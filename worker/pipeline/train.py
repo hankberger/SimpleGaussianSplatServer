@@ -26,6 +26,27 @@ def _compute_knn_scale(points: np.ndarray, k: int = 4) -> np.ndarray:
     return np.log(np.maximum(avg_dist, 1e-7)).astype(np.float32)
 
 
+def _se3_exp(tangent: torch.Tensor) -> torch.Tensor:
+    """Map se(3) tangent vectors (N, 6) -> SE(3) transforms (N, 4, 4).
+
+    Layout: [tx, ty, tz, wx, wy, wz] (translation, then rotation axis-angle).
+    Uses torch.matrix_exp on the 4x4 generator, which is exact and
+    differentiable, so camera-pose deltas can be learned by backprop.
+    """
+    n = tangent.shape[0]
+    t = tangent[:, :3]
+    w = tangent[:, 3:]
+    gen = torch.zeros(n, 4, 4, device=tangent.device, dtype=tangent.dtype)
+    gen[:, 0, 1] = -w[:, 2]
+    gen[:, 0, 2] = w[:, 1]
+    gen[:, 1, 0] = w[:, 2]
+    gen[:, 1, 2] = -w[:, 0]
+    gen[:, 2, 0] = -w[:, 1]
+    gen[:, 2, 1] = w[:, 0]
+    gen[:, :3, 3] = t
+    return torch.matrix_exp(gen)
+
+
 def _load_images_as_tensors(
     frame_paths: list[Path], device: str
 ) -> list[torch.Tensor]:
@@ -183,6 +204,19 @@ def train_gaussians(
 
         logger.info("Densification will run until step %d (%.0f%% of %d)", densify_end, densify_end / max_steps * 100, max_steps)
 
+        # Camera pose optimization: a learnable se(3) correction per camera,
+        # applied to the world-to-cam matrices. DUSt3R poses are approximate, so
+        # refining them jointly with the Gaussians is a large quality lever.
+        # Deltas start at zero (identity); they only move once stepped, after a
+        # warm-up that lets the Gaussians settle first.
+        pose_deltas = torch.nn.Parameter(torch.zeros(n_images, 6, device=device))
+        pose_opt = torch.optim.Adam([pose_deltas], lr=settings.pose_opt_lr, weight_decay=1e-6)
+        if settings.pose_opt_enabled:
+            logger.info(
+                "Camera pose optimization enabled (lr=%.1e, start=%d)",
+                settings.pose_opt_lr, settings.pose_opt_start,
+            )
+
         # PPISP photometric post-processing (optional)
         try:
             from ppisp import PPISP
@@ -213,11 +247,15 @@ def train_gaussians(
                     lr_decay_rate ** step
                 )
 
+            pose_active = settings.pose_opt_enabled and step >= settings.pose_opt_start
+
             for opt in optimizers.values():
                 opt.zero_grad(set_to_none=True)
             if use_ppisp:
                 for opt in ppisp_optimizers:
                     opt.zero_grad(set_to_none=True)
+            if pose_active:
+                pose_opt.zero_grad(set_to_none=True)
 
             # Cycle through images
             img_idx = step % n_images
@@ -231,7 +269,13 @@ def train_gaussians(
 
             # Rasterize with SH coefficients — gsplat computes view-dependent color.
             # quats are passed raw; the rasterizer normalizes them internally.
-            viewmat = w2c[img_idx : img_idx + 1]  # (1, 4, 4)
+            # When pose optimization is active, apply the learned SE(3) delta to
+            # this camera's world-to-cam matrix (differentiable w.r.t. the delta).
+            if pose_active:
+                delta = _se3_exp(pose_deltas[img_idx : img_idx + 1])  # (1, 4, 4)
+                viewmat = delta @ w2c[img_idx : img_idx + 1]  # (1, 4, 4)
+            else:
+                viewmat = w2c[img_idx : img_idx + 1]  # (1, 4, 4)
             K = Ks[img_idx : img_idx + 1]  # (1, 3, 3)
 
             renders, alphas, info = rasterization(
@@ -280,6 +324,8 @@ def train_gaussians(
                     opt.step()
                 for sched in ppisp_schedulers:
                     sched.step()
+            if pose_active:
+                pose_opt.step()
 
             # Densify (clone/split) + prune + opacity reset, with optimizer state
             # migrated to match. The strategy gates this to its refine window.
@@ -318,6 +364,14 @@ def train_gaussians(
         # Non-fatal: a preview failure must not fail an otherwise-successful job.
         try:
             preview_idx = n_images // 2
+            # Use the optimized pose for this camera if pose-opt ran.
+            if settings.pose_opt_enabled:
+                preview_view = (
+                    _se3_exp(pose_deltas[preview_idx : preview_idx + 1])
+                    @ w2c[preview_idx : preview_idx + 1]
+                ).detach()
+            else:
+                preview_view = w2c[preview_idx : preview_idx + 1]
             _save_preview(
                 rasterization,
                 params["means"].detach(),
@@ -325,7 +379,7 @@ def train_gaussians(
                 torch.exp(params["scales"].detach()),
                 torch.sigmoid(params["opacities"].detach()),
                 params["sh"].detach(),
-                w2c[preview_idx : preview_idx + 1],
+                preview_view,
                 Ks[preview_idx : preview_idx + 1],
                 img_w,
                 img_h,
