@@ -1,6 +1,12 @@
 #!/bin/bash
 set -e
 
+# Resolve repo root from this script's location (script lives in worker/) so
+# dust3r/ and worker/requirements.txt resolve correctly no matter where it's run.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(dirname "$SCRIPT_DIR")"
+cd "$REPO_ROOT"
+
 ENV_NAME="${1:-splatapp}"
 
 echo "=== SplatApp Environment Setup ==="
@@ -37,9 +43,9 @@ else
 fi
 cd ../../../..
 
-# Install server dependencies
-echo "=== Installing server dependencies ==="
-pip install -r server/requirements.txt
+# Install worker dependencies
+echo "=== Installing worker dependencies ==="
+pip install -r worker/requirements.txt
 
 # Verify ffmpeg
 echo "=== Verifying FFmpeg ==="
@@ -65,6 +71,6 @@ python -c "from gsplat import rasterization; print('gsplat import OK')"
 
 echo ""
 echo "=== Setup Complete ==="
-echo "To start the server:"
+echo "To start the worker:"
 echo "  conda activate $ENV_NAME"
-echo "  uvicorn server.app:app --host 0.0.0.0 --port 8000"
+echo "  uvicorn worker.app:app --host 0.0.0.0 --port 8000"
