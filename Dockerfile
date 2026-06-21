@@ -38,9 +38,22 @@ RUN cd dust3r/croco/models/curope/ \
 
 # Install worker dependencies (separate COPY for layer caching)
 COPY worker/requirements.txt /app/worker/requirements.txt
-# Install worker deps; --no-build-isolation lets PPISP's CUDA extensions
-# find the already-installed torch + CUDA toolkit at compile time.
-RUN pip install --no-cache-dir --no-build-isolation -r worker/requirements.txt
+
+# PPISP compiles a CUDA extension at install time. Its setup.py detects the GPU
+# arch from the live device, but no GPU is visible during `docker build`, so it
+# falls back to a hardcoded arch list that includes sm_120 (Blackwell) — which
+# CUDA 12.1's nvcc cannot compile ("Unsupported gpu architecture 'compute_120'").
+# Pre-install a copy with that arch dropped; the remaining 7.5/8.0/8.9 cover the
+# 4090 (sm_89). It ignores TORCH_CUDA_ARCH_LIST, hence the source patch.
+RUN git clone --depth 1 --branch v1.0.0 https://github.com/nv-tlabs/ppisp.git /tmp/ppisp \
+    && sed -i '/compute_120/d' /tmp/ppisp/setup.py \
+    && pip install --no-cache-dir --no-build-isolation /tmp/ppisp \
+    && rm -rf /tmp/ppisp
+
+# Install the remaining worker deps (ppisp filtered out — already built above).
+# --no-build-isolation lets CUDA extensions find the installed torch + toolkit.
+RUN grep -v '^ppisp' worker/requirements.txt > /tmp/requirements.txt \
+    && pip install --no-cache-dir --no-build-isolation -r /tmp/requirements.txt
 
 # ==============================================================================
 # Stage 2: Runtime — lean(ish) image with everything needed to run
@@ -57,6 +70,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && apt-get update && apt-get install -y --no-install-recommends \
         python3.11 \
         python3.11-venv \
+        python3.11-dev \
         ffmpeg \
         libgl1 \
         libglib2.0-0 \
@@ -77,6 +91,7 @@ COPY worker/ /app/worker/
 ENV SPLAT_JOBS_DIR=/app/jobs \
     SPLAT_GPU_DEVICE=cuda:0 \
     HF_HOME=/app/.cache/huggingface \
+    TORCH_EXTENSIONS_DIR=/app/.cache/torch_extensions \
     PYTHONUNBUFFERED=1
 
 # Health check — long start-period to allow first-run model download (~3.5GB)
