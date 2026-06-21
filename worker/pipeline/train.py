@@ -363,7 +363,12 @@ def train_gaussians(
                     params, optimizers, strategy_state, step, info,
                     lr=optimizers["means"].param_groups[0]["lr"],
                 )
-            else:
+            elif info["means2d"].grad is not None:
+                # DefaultStrategy does info["means2d"].grad.clone() unguarded. On a
+                # rare step where nothing contributed to the 2D means (e.g. right
+                # after an opacity reset with a sparse init), that grad is None and
+                # gsplat crashes. Skip this step's refine; accumulation resumes next
+                # step. (Reset itself happens at step 3000, before grads go None.)
                 strategy.step_post_backward(
                     params, optimizers, strategy_state, step, info, packed=False
                 )
