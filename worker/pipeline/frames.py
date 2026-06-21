@@ -15,7 +15,10 @@ def _run_cmd(cmd: list[str], description: str) -> subprocess.CompletedProcess:
     logger.info("Running %s: %s", description, " ".join(cmd))
     result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
     if result.returncode != 0:
-        raise RuntimeError(f"{description} failed: {result.stderr[:500]}")
+        detail = (result.stderr or result.stdout or "").strip() or "(no output)"
+        raise RuntimeError(
+            f"{description} failed (exit {result.returncode}): {detail[:500]}"
+        )
     return result
 
 
@@ -23,7 +26,7 @@ def normalize_video(video_path: Path) -> Path:
     """Re-encode video to H.264/MP4 if it isn't already. Returns path to normalized file."""
     cmd = [
         settings.ffprobe_path,
-        "-v", "quiet",
+        "-v", "error",
         "-print_format", "json",
         "-show_streams",
         str(video_path),
@@ -63,13 +66,16 @@ def normalize_video(video_path: Path) -> Path:
 
 def get_video_info(video_path: Path) -> dict:
     """Get video metadata via ffprobe."""
+    # NOTE: don't add `-show_entries stream_side_data=...` — that section only
+    # exists in ffmpeg 5.x+, and Ubuntu 22.04 ships 4.4. `-show_streams` already
+    # emits `side_data_list` (with rotation) on both, and we fall back to the
+    # legacy `tags.rotate` below, so rotation is covered without the fragile flag.
     cmd = [
         settings.ffprobe_path,
-        "-v", "quiet",
+        "-v", "error",
         "-print_format", "json",
         "-show_streams",
         "-show_format",
-        "-show_entries", "stream_side_data=rotation",
         str(video_path),
     ]
     result = _run_cmd(cmd, "ffprobe")
