@@ -257,9 +257,10 @@ def train_gaussians(
             if pose_active:
                 pose_opt.zero_grad(set_to_none=True)
 
-            # Cycle through images
-            img_idx = step % n_images
-            gt_image = images[img_idx]  # (C, H, W)
+            # Select this step's batch of cameras (cameras_per_step views render
+            # in one rasterization call for better GPU utilization).
+            batch = max(1, settings.cameras_per_step)
+            idxs = [(step * batch + j) % n_images for j in range(batch)]
 
             # Progressive SH degree: activate higher bands as training progresses
             active_sh_degree = 0
@@ -267,16 +268,14 @@ def train_gaussians(
                 if d < len(sh_activation_steps) and step >= sh_activation_steps[d]:
                     active_sh_degree = d
 
-            # Rasterize with SH coefficients — gsplat computes view-dependent color.
-            # quats are passed raw; the rasterizer normalizes them internally.
-            # When pose optimization is active, apply the learned SE(3) delta to
-            # this camera's world-to-cam matrix (differentiable w.r.t. the delta).
+            # Build the batch's view matrices — quats are passed raw (the
+            # rasterizer normalizes them). When pose optimization is active, apply
+            # each camera's learned SE(3) delta (differentiable w.r.t. the delta).
             if pose_active:
-                delta = _se3_exp(pose_deltas[img_idx : img_idx + 1])  # (1, 4, 4)
-                viewmat = delta @ w2c[img_idx : img_idx + 1]  # (1, 4, 4)
+                viewmats = _se3_exp(pose_deltas[idxs]) @ w2c[idxs]  # (B, 4, 4)
             else:
-                viewmat = w2c[img_idx : img_idx + 1]  # (1, 4, 4)
-            K = Ks[img_idx : img_idx + 1]  # (1, 3, 3)
+                viewmats = w2c[idxs]  # (B, 4, 4)
+            Ks_b = Ks[idxs]  # (B, 3, 3)
 
             renders, alphas, info = rasterization(
                 means=params["means"],
@@ -284,8 +283,8 @@ def train_gaussians(
                 scales=torch.exp(params["scales"]),
                 opacities=torch.sigmoid(params["opacities"]),
                 colors=params["sh"],
-                viewmats=viewmat,
-                Ks=K,
+                viewmats=viewmats,
+                Ks=Ks_b,
                 width=img_w,
                 height=img_h,
                 packed=False,
@@ -296,26 +295,28 @@ def train_gaussians(
             # Strategy bookkeeping: retain/track 2D-means gradients for this step.
             strategy.step_pre_backward(params, optimizers, strategy_state, step, info)
 
-            # renders: (1, H, W, C) -> (C, H, W)
-            rendered = renders[0]  # (H, W, 3)
-            if use_ppisp:
-                rendered = ppisp_module(
-                    rendered,
-                    pixel_coords,
-                    resolution=(img_w, img_h),
-                    camera_idx=0,
-                    frame_idx=img_idx,
-                )
-            rendered = rendered.permute(2, 0, 1)  # (C, H, W)
+            # renders: (B, H, W, 3). PPISP is per-frame, so apply it per view.
+            rendered_views = []
+            for j, idx in enumerate(idxs):
+                r = renders[j]  # (H, W, 3)
+                if use_ppisp:
+                    r = ppisp_module(
+                        r,
+                        pixel_coords,
+                        resolution=(img_w, img_h),
+                        camera_idx=0,
+                        frame_idx=idx,
+                    )
+                rendered_views.append(r.permute(2, 0, 1))  # (3, H, W)
+            rendered = torch.stack(rendered_views, dim=0)  # (B, 3, H, W)
+            gt_image = torch.stack([images[i] for i in idxs], dim=0)  # (B, 3, H, W)
 
             # L1 every step; SSIM (more expensive) only every ssim_every steps.
             # Loss math optionally under autocast (rasterizer stays fp32).
             with torch.autocast(device_type="cuda", enabled=settings.use_amp):
                 l1_loss = F.l1_loss(rendered, gt_image)
                 if settings.ssim_every <= 1 or step % settings.ssim_every == 0:
-                    ssim_loss = 1.0 - ssim_fn(
-                        rendered.unsqueeze(0), gt_image.unsqueeze(0)
-                    )
+                    ssim_loss = 1.0 - ssim_fn(rendered, gt_image)
                     loss = (
                         (1.0 - settings.ssim_weight) * l1_loss
                         + settings.ssim_weight * ssim_loss

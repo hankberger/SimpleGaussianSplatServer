@@ -39,6 +39,9 @@ class Settings(BaseSettings):
     # use L1 only. 2 roughly halves SSIM cost with negligible quality impact.
     # Set to 1 to compute SSIM every step.
     ssim_every: int = 2
+    # Render this many cameras per training step in one rasterization call.
+    # >1 improves GPU utilization (fewer, larger steps); 1 = original behavior.
+    cameras_per_step: int = 1
     sh_degree: int = 3
     # gsplat rasterization mode: "antialiased" compensates opacity for the 2D
     # dilation filter — cleaner edges/fewer aliasing artifacts than "classic".
