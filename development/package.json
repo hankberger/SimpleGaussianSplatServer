@@ -1,0 +1,12 @@
+{
+  "name": "splatapp-development",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Local development tools — benchmark viewer for the splat worker. Not part of the production app.",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2"
+  }
+}

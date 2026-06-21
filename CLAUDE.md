@@ -8,13 +8,15 @@ SplatApp is a video-to-3D-Gaussian-Splat platform. Users upload videos from a mo
 
 ## Architecture
 
-Four services work together:
+Four services work together (plus local-only dev tooling in `development/`):
 
 - **Worker** (`worker/`, port 8000) — FastAPI Python worker that runs the GPU-intensive ML pipeline. Processes jobs through 4 stages: frame extraction (FFmpeg) → pose estimation (DUSt3R) → training (gsplat) → PLY-to-splat conversion. One GPU lock serializes all job execution. Job state is in-memory (non-persistent). When `SPLAT_QUEUE_URL` is set, it polls the render-queue for remote jobs instead of accepting direct uploads.
 
 - **Render Queue** (`render-queue/`, Cloudflare Worker) — Hono.js TypeScript worker providing the public API. Stores videos/results in R2, job metadata in D1 (SQLite). Handles user auth (email + OAuth via JWT), job queuing, and the recommendation feed. The GPU worker polls `/api/v1/worker/claim` to pick up jobs.
 
-- **Web Viewer** (`web-viewer/`, port 9000) — Static WebGL Gaussian splat renderer (fork of antimatter15/splat), deployed to Cloudflare Pages. `index.html` loads splats via `?url=<splat_url>`. `benchmark.html` is a standalone dev tool that uploads a video straight to the worker, polls/times the pipeline stages, shows the rendered preview, and opens the result in `index.html`. No external JS dependencies.
+- **Web Viewer** (`web-viewer/`, port 9000) — Static WebGL Gaussian splat renderer (fork of antimatter15/splat), deployed to Cloudflare Pages. `index.html` loads splats via `?url=<splat_url>`. Production only — no external JS dependencies.
+
+- **Development tools** (`development/`) — Local-only, not deployed. `benchmark.html` uploads a video straight to the worker, polls/times the pipeline stages, shows the rendered preview, and opens the result in the renderer. `development/server.js` is a small Express server (`npm start`, port 9100) that serves the benchmark page plus the `web-viewer/` renderer from one origin.
 
 - **Mobile App** (`mobile/`) — Expo SDK 54 React Native app with camera recording, video upload, job status polling, feed browsing, and likes. Three context providers: AuthContext (JWT in SecureStore), JobContext (polling), FeedContext (paginated feed).
 

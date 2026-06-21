@@ -119,14 +119,20 @@ npm start
 
 The renderer runs at **http://localhost:9000**.
 
-### Benchmark viewer (optional)
+### Benchmark viewer (optional, dev only)
 
-`web-viewer/benchmark.html` is a standalone page for benchmarking the worker:
-open it in a browser (it can be served statically or opened directly), point it
-at the worker URL (default `http://localhost:8000`), upload a video, and it will
-poll and time each pipeline stage, show the rendered preview, and open the
-finished splat in the 3D viewer. The worker enables CORS so the browser can call
-it directly.
+`development/benchmark.html` benchmarks the worker: point it at the worker URL
+(default `http://localhost:8000`), upload a video, and it polls and times each
+pipeline stage, shows the rendered preview, and opens the finished splat in the
+3D viewer. The worker enables CORS so the browser can call it directly. Run it
+with the small Express dev server (which also serves the renderer so the
+"Open in 3D viewer" button works):
+
+```bash
+cd development
+npm install
+npm start            # http://localhost:9100/benchmark.html
+```
 
 ### 3. Submit a video
 
