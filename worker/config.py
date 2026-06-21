@@ -21,7 +21,9 @@ class Settings(BaseSettings):
 
     # DUSt3R
     dust3r_model: str = "naver/DUSt3R_ViTLarge_BaseDecoder_512_dpt"
-    dust3r_alignment_iters: int = 200
+    # Global-alignment iterations dominate pose time. 100 converges enough here;
+    # the joint pose optimization during training corrects residual error.
+    dust3r_alignment_iters: int = 100
     dust3r_max_pairs_complete: int = 20
     dust3r_max_points: int = 500_000
     dust3r_confidence_threshold: float = 1.5
@@ -67,6 +69,12 @@ class Settings(BaseSettings):
     densify_grad_thresh: float = 0.0002
     densify_max_gaussians: int = 1_000_000
     knn_k: int = 4
+    # Densification strategy: "mcmc" (fixed Gaussian budget = faster/predictable,
+    # quality on par at a given budget) or "default" (classic grad-based growth).
+    densify_strategy: str = "mcmc"
+    # Hard Gaussian budget for MCMC. The main speed/quality dial — lower is
+    # faster. Tune against your end-of-training `n_gaussians=` count.
+    mcmc_cap_max: int = 350_000
 
     # Camera pose optimization — refine the approximate DUSt3R poses jointly
     # with the Gaussians via a learnable per-camera SE(3) correction.

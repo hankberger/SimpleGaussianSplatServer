@@ -170,25 +170,39 @@ def train_gaussians(
         densify_end = max(settings.densify_end, int(max_steps * 0.7))
         scene_scale = float(np.linalg.norm(points.max(axis=0) - points.min(axis=0)))
 
-        # gsplat DefaultStrategy: classic 3DGS grow (clone/split) + prune +
-        # opacity reset, with correct optimizer-state migration. Replaces the
-        # previous hand-rolled densification, which rebuilt Adam on every refine
-        # step and thereby discarded all moment estimates. Existing tunables map
-        # onto the strategy's knobs so behaviour stays controllable via config.
-        from gsplat.strategy import DefaultStrategy
+        # Densification strategy (both migrate optimizer state correctly):
+        #  - "mcmc":    fixed Gaussian budget (cap_max). Per-step cost is bounded
+        #               by the cap, so training time is predictable and usually
+        #               faster, with quality on par at a given budget.
+        #  - "default": classic 3DGS grad-based grow/split/clone/prune (unbounded).
+        use_mcmc = settings.densify_strategy == "mcmc"
+        if use_mcmc:
+            from gsplat.strategy import MCMCStrategy
 
-        strategy = DefaultStrategy(
-            prune_opa=0.005,
-            grow_grad2d=settings.densify_grad_thresh,
-            grow_scale3d=0.01,
-            prune_scale3d=0.1,
-            refine_start_iter=settings.densify_start,
-            refine_stop_iter=densify_end,
-            reset_every=settings.opacity_reset_interval,
-            refine_every=settings.densify_interval,
-            verbose=True,
-        )
-        strategy_state = strategy.initialize_state(scene_scale=scene_scale)
+            strategy = MCMCStrategy(
+                cap_max=settings.mcmc_cap_max,
+                refine_start_iter=settings.densify_start,
+                refine_stop_iter=densify_end,
+                refine_every=settings.densify_interval,
+                min_opacity=0.005,
+                verbose=True,
+            )
+            strategy_state = strategy.initialize_state()
+        else:
+            from gsplat.strategy import DefaultStrategy
+
+            strategy = DefaultStrategy(
+                prune_opa=0.005,
+                grow_grad2d=settings.densify_grad_thresh,
+                grow_scale3d=0.01,
+                prune_scale3d=0.1,
+                refine_start_iter=settings.densify_start,
+                refine_stop_iter=densify_end,
+                reset_every=settings.opacity_reset_interval,
+                refine_every=settings.densify_interval,
+                verbose=True,
+            )
+            strategy_state = strategy.initialize_state(scene_scale=scene_scale)
         strategy.check_sanity(params, optimizers)
 
         # LR schedule for means: exponential decay from lr_means to lr_means_final
@@ -292,8 +306,10 @@ def train_gaussians(
                 rasterize_mode=settings.rasterize_mode,
             )
 
-            # Strategy bookkeeping: retain/track 2D-means gradients for this step.
-            strategy.step_pre_backward(params, optimizers, strategy_state, step, info)
+            # Strategy bookkeeping: DefaultStrategy needs 2D-means gradients
+            # retained pre-backward; MCMC has no pre-backward hook.
+            if not use_mcmc:
+                strategy.step_pre_backward(params, optimizers, strategy_state, step, info)
 
             # renders: (B, H, W, 3). PPISP is per-frame, so apply it per view.
             rendered_views = []
@@ -339,11 +355,18 @@ def train_gaussians(
             if pose_active:
                 pose_opt.step()
 
-            # Densify (clone/split) + prune + opacity reset, with optimizer state
-            # migrated to match. The strategy gates this to its refine window.
-            strategy.step_post_backward(
-                params, optimizers, strategy_state, step, info, packed=False
-            )
+            # Refine: densify/prune (default) or relocate + noise (mcmc), with
+            # optimizer state migrated to match. Gated to the strategy's window.
+            if use_mcmc:
+                # MCMC scales its exploration noise by the current means LR.
+                strategy.step_post_backward(
+                    params, optimizers, strategy_state, step, info,
+                    lr=optimizers["means"].param_groups[0]["lr"],
+                )
+            else:
+                strategy.step_post_backward(
+                    params, optimizers, strategy_state, step, info, packed=False
+                )
 
             # Log SH degree activation
             if active_sh_degree > 0 and step in sh_activation_steps:
