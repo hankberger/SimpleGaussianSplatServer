@@ -13,6 +13,109 @@ logger = logging.getLogger(__name__)
 _dust3r_model = None
 
 
+def estimate_poses(all_frames, sharp_frames, config):
+    """Estimate camera poses + a point cloud for the frames (backend dispatcher).
+
+    Tries COLMAP first (geometric SfM — sub-pixel accurate, CPU-bound, sidesteps
+    DUSt3R's GPU-memory wall), falling back to DUSt3R (learned — robust on hard,
+    low-texture, or few-frame captures) if COLMAP is disabled, errors, or
+    registers too few frames.
+
+    all_frames is the full evenly-spaced extraction (COLMAP runs on this so its
+    sequential matcher sees even spacing); sharp_frames is the blur-filtered
+    subset used for TRAINING. COLMAP registers all_frames then filters the result
+    to sharp_frames. DUSt3R runs directly on sharp_frames (its memory limits it).
+
+    Returns:
+        poses:            (N, 4, 4) cam-to-world, scene-normalized
+        intrinsics:       (N, 3, 3) at the training resolution (config.resolution)
+        points:           (M, 3) point cloud, scene-normalized
+        colors:           (M, 3) RGB in [0, 1]
+        used_frame_paths: the sharp, registered frames aligned with poses
+        backend:          "colmap" or "dust3r"
+    """
+    training_resolution = config.resolution
+
+    if settings.colmap_enabled:
+        try:
+            from worker.pipeline.poses_colmap import estimate_poses_colmap
+
+            # Register the FULL evenly-spaced set (sequential needs even spacing).
+            poses, intrinsics, points, colors, used = estimate_poses_colmap(all_frames)
+            n_registered = len(used)
+            min_needed = max(
+                settings.min_frames,
+                int(len(all_frames) * settings.colmap_min_registered_frac),
+            )
+            if n_registered < min_needed:
+                raise RuntimeError(
+                    f"COLMAP registered only {n_registered}/{len(all_frames)} frames "
+                    f"(< {min_needed} needed); falling back to DUSt3R"
+                )
+            # Keep the full sparse cloud (better init), but train only on the sharp
+            # subset: filter the registered cameras to sharp frames by filename.
+            sharp_names = {p.name for p in sharp_frames}
+            keep = [i for i, p in enumerate(used) if p.name in sharp_names]
+            if len(keep) < settings.min_frames:
+                raise RuntimeError(
+                    f"only {len(keep)} sharp frames registered (< {settings.min_frames})"
+                )
+            poses = poses[keep]
+            intrinsics = intrinsics[keep]
+            used = [used[i] for i in keep]
+            points, poses = _normalize_scene(points, poses)
+            logger.info(
+                "Pose backend: COLMAP (%d/%d registered, %d sharp for training, %d points)",
+                n_registered, len(all_frames), len(used), len(points),
+            )
+            return poses, intrinsics, points, colors, used, "colmap"
+        except Exception:
+            logger.warning(
+                "COLMAP pose estimation failed; falling back to DUSt3R", exc_info=True
+            )
+
+    # DUSt3R runs on the sharp subset (sharper + fewer frames). Its global
+    # alignment holds all views jointly on the GPU, so cap at dust3r_max_frames.
+    dust3r_frames = sharp_frames
+    if len(dust3r_frames) > settings.dust3r_max_frames:
+        idx = np.unique(
+            np.linspace(0, len(dust3r_frames) - 1, settings.dust3r_max_frames)
+            .round()
+            .astype(int)
+        )
+        dust3r_frames = [dust3r_frames[i] for i in idx]
+        logger.info(
+            "DUSt3R fallback: subsampled %d -> %d frames for GPU memory",
+            len(frame_paths), len(dust3r_frames),
+        )
+    poses, intrinsics, points, colors = _estimate_poses_dust3r(
+        dust3r_frames, settings.dust3r_resolution, training_resolution
+    )
+    points, poses = _normalize_scene(points, poses)
+    logger.info(
+        "Pose backend: DUSt3R (%d frames, %d points)", len(dust3r_frames), len(points)
+    )
+    return poses, intrinsics, points, colors, list(dust3r_frames), "dust3r"
+
+
+def _normalize_scene(
+    points: np.ndarray, poses: np.ndarray
+) -> tuple[np.ndarray, np.ndarray]:
+    """Center the scene on its point-cloud centroid and scale so the 95th-pct
+    radius ≈ 5. Applied identically to both backends so downstream scene-scale
+    heuristics (densification, cleanup) behave the same regardless of pose source
+    — both COLMAP and DUSt3R are only solved up-to-scale.
+    """
+    centroid = points.mean(axis=0)
+    pc = points - centroid
+    radius = float(np.percentile(np.linalg.norm(pc, axis=1), 95))
+    scale = 5.0 / max(radius, 1e-6)
+    points = pc * scale
+    poses = poses.copy()
+    poses[:, :3, 3] = (poses[:, :3, 3] - centroid) * scale
+    return points, poses
+
+
 def _load_model():
     """Load DUSt3R model, caching at module level."""
     global _dust3r_model
@@ -29,16 +132,17 @@ def _load_model():
     return _dust3r_model
 
 
-def estimate_poses(
+def _estimate_poses_dust3r(
     frame_paths: list[Path],
-    resolution: int = 512,
+    resolution: int,
+    training_resolution: int,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """
-    Estimate camera poses and dense point cloud using DUSt3R.
+    Estimate camera poses and a dense point cloud using DUSt3R (fallback path).
 
-    Returns:
+    Returns (un-normalized; the dispatcher applies _normalize_scene):
         poses:      (N, 4, 4) cam-to-world matrices
-        intrinsics: (N, 3, 3) camera intrinsic matrices
+        intrinsics: (N, 3, 3) camera intrinsics, rescaled to training_resolution
         points:     (M, 3)    3D point positions
         colors:     (M, 3)    point RGB colors [0, 1]
     """
@@ -59,7 +163,7 @@ def estimate_poses(
     if n_images <= settings.dust3r_max_pairs_complete:
         graph_mode = "complete"
     else:
-        graph_mode = "swin-5"
+        graph_mode = f"swin-{settings.dust3r_swin_window}"
     logger.info("Creating pairs with graph mode: %s (%d images)", graph_mode, n_images)
     pairs = make_pairs(images, scene_graph=graph_mode, prefilter=None, symmetrize=True)
     logger.info("Created %d image pairs", len(pairs))
@@ -94,25 +198,16 @@ def estimate_poses(
     intrinsics = _extract_intrinsics(scene, n_images)
     points, colors = _extract_point_cloud(scene, n_images)
 
-    # Normalize scene: center on point cloud centroid, scale so radius ≈ 5
-    centroid = points.mean(axis=0)
-    points_centered = points - centroid
-    radius = np.percentile(np.linalg.norm(points_centered, axis=1), 95)
-    target_radius = 5.0
-    scale = target_radius / max(radius, 1e-6)
+    # Rescale intrinsics from DUSt3R's working resolution to the training
+    # resolution (DUSt3R runs at its own fixed res; the trainer renders larger).
+    if training_resolution != resolution:
+        scale_k = training_resolution / resolution
+        intrinsics = intrinsics.copy()
+        intrinsics[:, 0, :] *= scale_k  # fx, skew, cx
+        intrinsics[:, 1, :] *= scale_k  # fy, cy
+        intrinsics[:, 2, :] = [0, 0, 1]
 
-    points = points_centered * scale
-
-    # Apply same transform to camera positions (translation column of c2w)
-    poses[:, :3, 3] = (poses[:, :3, 3] - centroid) * scale
-
-    logger.info(
-        "DUSt3R results: %d poses, %d points (radius=%.3f, scale=%.3f)",
-        len(poses),
-        len(points),
-        radius,
-        scale,
-    )
+    logger.info("DUSt3R results: %d poses, %d points", len(poses), len(points))
 
     # Cleanup DUSt3R scene to free GPU memory
     del scene, output, pairs

@@ -3,10 +3,21 @@ dust3r/
 node_modules/
 package-lock.json
 
+# LichtFeld Studio vendored prebuilt bundle (large binaries, not tracked in git)
+newworker/bin/
+newworker/lib/
+newworker/share/
+
 # Job artifacts
 jobs/
 *.splat
 *.ply
+
+# Local benchmark sample videos (large binaries, copied in by hand)
+development/public/
+
+# Server-side benchmark history store
+development/benchmark-data.json
 
 # Python
 __pycache__/

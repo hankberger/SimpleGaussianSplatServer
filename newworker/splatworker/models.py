@@ -1,6 +1,7 @@
+from datetime import datetime
 from enum import Enum
 from typing import Optional
-from datetime import datetime
+
 from pydantic import BaseModel, Field
 
 
@@ -18,9 +19,9 @@ class JobStatus(str, Enum):
 
 class JobConfig(BaseModel):
     output_format: OutputFormat = OutputFormat.SPLAT
-    max_frames: int = Field(default=40, ge=8, le=200)
-    training_iterations: int = Field(default=7000, ge=1000, le=30000)
-    resolution: int = Field(default=768, ge=256, le=1920)
+    max_frames: int = Field(default=120, ge=8, le=300)
+    training_iterations: int = Field(default=30000, ge=1000, le=100000)
+    resolution: int = Field(default=1280, ge=256, le=3840)
 
 
 class StageProgress(BaseModel):

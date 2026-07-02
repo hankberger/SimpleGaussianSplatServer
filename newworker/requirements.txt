@@ -1,0 +1,30 @@
+# SplatApp v2 worker (COLMAP/DUSt3R → LichtFeld MRNF).
+#
+# The trainer itself is the bundled LichtFeld Studio native binary (bin/ + lib/),
+# NOT a pip package — these deps are only for the worker's own stages: the HTTP
+# server, frame extraction, pose estimation, post-training cleanup, and previews.
+
+fastapi>=0.104.0
+uvicorn[standard]>=0.24.0
+python-multipart>=0.0.6
+pydantic-settings>=2.1.0
+httpx>=0.25.0
+
+numpy>=1.24.0
+scipy>=1.11.0
+opencv-python-headless>=4.8.0
+plyfile>=1.0
+
+# COLMAP Python bindings (primary pose backend; geometric SfM). Self-contained
+# manylinux wheel bundling COLMAP + Ceres. If it fails to import, the pose stage
+# falls back to DUSt3R automatically.
+pycolmap>=0.6.1
+
+# Optional — only needed for the DUSt3R fallback backend and for rendering the
+# preview thumbnail from the trained PLY. A COLMAP-only deploy can omit these
+# (the worker degrades gracefully: no DUSt3R fallback, no preview image).
+torch>=2.1.0
+gsplat>=1.0.0
+imageio>=2.31.0
+# DUSt3R also needs its repo cloned to <repo_root>/dust3r and its own
+# requirements installed (einops, roma, huggingface-hub, ...). See README.

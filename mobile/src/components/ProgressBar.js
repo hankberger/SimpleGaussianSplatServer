@@ -8,14 +8,16 @@ const AnimatedCircle = Animated.createAnimatedComponent(Circle);
 const STAGE_WEIGHTS = {
   frame_extraction: 0.05,
   pose_estimation: 0.30,
-  training: 0.60,
-  conversion: 0.05,
+  training: 0.57,
+  cleanup: 0.05,
+  conversion: 0.03,
 };
 
 const STAGE_LABELS = {
   frame_extraction: 'Extracting frames',
   pose_estimation: 'Estimating poses',
   training: 'Training gaussians',
+  cleanup: 'Cleaning up splat',
   conversion: 'Converting output',
 };
 

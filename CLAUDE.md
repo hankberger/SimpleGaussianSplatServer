@@ -10,7 +10,7 @@ SplatApp is a video-to-3D-Gaussian-Splat platform. Users upload videos from a mo
 
 Four services work together (plus local-only dev tooling in `development/`):
 
-- **Worker** (`worker/`, port 8000) — FastAPI Python worker that runs the GPU-intensive ML pipeline. Processes jobs through 4 stages: frame extraction (FFmpeg) → pose estimation (DUSt3R) → training (gsplat) → PLY-to-splat conversion. One GPU lock serializes all job execution. Job state is in-memory (non-persistent). When `SPLAT_QUEUE_URL` is set, it polls the render-queue for remote jobs instead of accepting direct uploads.
+- **Worker** (`worker/`, port 8000) — FastAPI Python worker that runs the GPU-intensive ML pipeline. Processes jobs through 5 stages: frame extraction (FFmpeg) → pose estimation (DUSt3R) → training (gsplat) → cleanup (prune low-confidence Gaussians) → PLY-to-splat conversion. One GPU lock serializes all job execution. Job state is in-memory (non-persistent). When `SPLAT_QUEUE_URL` is set, it polls the render-queue for remote jobs instead of accepting direct uploads.
 
 - **Render Queue** (`render-queue/`, Cloudflare Worker) — Hono.js TypeScript worker providing the public API. Stores videos/results in R2, job metadata in D1 (SQLite). Handles user auth (email + OAuth via JWT), job queuing, and the recommendation feed. The GPU worker polls `/api/v1/worker/claim` to pick up jobs.
 
@@ -63,7 +63,7 @@ curl http://localhost:8000/api/v1/jobs/<job_id>
 ## Key API Contracts
 
 - `POST /api/v1/jobs` — FormData with `video` field + optional `training_iterations`, `resolution`, `max_frames`, `output_format`. Returns `{ job_id, status, message }`.
-- `GET /api/v1/jobs/{id}` — Returns `{ job_id, status, stages[], error }`. Stages: `frame_extraction`, `pose_estimation`, `training`, `conversion`. Training detail format: `"step X/Y, loss=Z"`.
+- `GET /api/v1/jobs/{id}` — Returns `{ job_id, status, stages[], error }`. Stages: `frame_extraction`, `pose_estimation`, `training`, `cleanup`, `conversion`. Training detail format: `"step X/Y, loss=Z"`.
 - `GET /api/v1/jobs/{id}/preview` — After training, the worker renders a representative view and saves `preview.png` + `preview.webp`. Serves the WebP by default (`?format=png` for PNG). In queue mode these are uploaded to R2 (`jobs/{id}/preview.webp`) and surfaced as `preview_url` on the job status and feed items.
 - Render queue worker routes (`/api/v1/worker/*`) use `WORKER_API_KEY` header auth, including `PUT /api/v1/worker/jobs/{id}/preview?format=webp|png` for the worker to upload previews.
 - User auth uses JWT Bearer tokens (30-day expiry).
@@ -98,9 +98,10 @@ Schema lives in `render-queue/migrations/` (numbered `0001`+). Apply with the `m
 ## Pipeline Details
 
 The ML pipeline in `worker/pipeline/` is the core of the project:
-- `frames.py` — FFmpeg scene-change keyframe extraction + OpenCV Laplacian blur filtering
+- `frames.py` — FFmpeg frame extraction (uniform temporal sampling by default — correct for a continuous phone capture; `SPLAT_FRAME_EXTRACTION_MODE=scene` for scene-change detection) + OpenCV Laplacian blur filtering
 - `poses.py` — DUSt3R ViT-Large model (cached globally after first load, ~3.5GB). Returns camera poses (N,4,4), intrinsics, point cloud, colors.
 - `train.py` — gsplat Gaussian optimization. Loss: SSIM + L1 + L2 regularization. Densification via gradient-based splitting/cloning.
+- `cleanup.py` — post-training PLY pruning of low-confidence Gaussians: low opacity, oversized blobs (median-multiple + absolute scene-fraction cap), and floater islands (connected components over a kNN proximity graph, dropping small detached clusters). Robust to high outlier fractions; config via `SPLAT_CLEANUP_*`. In-place, non-fatal.
 - `convert.py` — PLY to .splat binary (32 bytes/gaussian, sorted by importance)
 
 DUSt3R must be cloned to `./dust3r/` at the repo root (not included in git).

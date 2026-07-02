@@ -4,7 +4,7 @@ import shutil
 import time
 from pathlib import Path
 
-from worker.config import settings
+from splatworker.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -14,7 +14,7 @@ def cleanup_job_dir(job_dir: Path, keep_result: bool = True):
     if not job_dir.exists():
         return
     for item in job_dir.iterdir():
-        # Keep the result splat/ply, preview thumbnails, and the debug dataset zip
+        # Keep the result splat/ply, preview thumbnails, and the debug dataset zip.
         if keep_result and item.suffix in (".splat", ".ply", ".png", ".webp", ".zip"):
             continue
         if item.is_dir():

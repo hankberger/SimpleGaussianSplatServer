@@ -75,6 +75,7 @@
         cursor: pointer;
       }
       button:disabled { opacity: .5; cursor: not-allowed; }
+      input:disabled, select:disabled { opacity: .4; cursor: not-allowed; }
       button.secondary { background: #21262d; }
       .stages { list-style: none; padding: 0; margin: 0; }
       .stages li {
@@ -105,6 +106,17 @@
       th { color: var(--muted); font-weight: 600; }
       .err { color: var(--fail); font-size: 13px; margin-top: 10px; white-space: pre-wrap; }
       .hint { color: var(--muted); font-size: 12px; margin-top: 6px; }
+      .samples { display: flex; gap: 8px; }
+      .samples .sample {
+        flex: 1;
+        width: auto;
+        margin-top: 0;
+        background: #21262d;
+        font-weight: 500;
+        padding: 8px 6px;
+        font-size: 13px;
+      }
+      .samples .sample.selected { background: var(--accent); }
     </style>
   </head>
   <body>
@@ -118,8 +130,20 @@
         <label for="worker">Worker URL</label>
         <input type="text" id="worker" placeholder="http://localhost:8000" />
 
+        <label>Quick samples</label>
+        <div class="samples" id="samples">
+          <button type="button" class="sample" data-url="public/Couch.MOV" data-name="Couch.MOV">Couch</button>
+          <button type="button" class="sample" data-url="public/Flamingo.MOV" data-name="Flamingo.MOV">Flamingo</button>
+          <button type="button" class="sample" data-url="public/Splat_Sample.MOV" data-name="Splat_Sample.MOV">Splat Sample</button>
+        </div>
+
         <label for="video">Video file</label>
         <input type="file" id="video" accept="video/*" />
+
+        <label style="display:flex; align-items:center; gap:8px; margin:10px 0 2px; cursor:pointer; font-weight:600;">
+          <input type="checkbox" id="useDefaults" style="width:auto; margin:0;" />
+          Use worker defaults (ignore the fields below)
+        </label>
 
         <div class="row">
           <div>
@@ -128,7 +152,7 @@
           </div>
           <div>
             <label for="frames">Max frames</label>
-            <input type="number" id="frames" value="40" min="8" max="80" />
+            <input type="number" id="frames" value="40" min="8" max="200" />
           </div>
         </div>
         <div class="row">
@@ -160,6 +184,7 @@
             <div class="actions">
               <button class="secondary" id="openViewer">Open splat in 3D viewer</button>
               <button class="secondary" id="downloadResult">Download result</button>
+              <button class="secondary" id="downloadDataset">Download COLMAP dataset</button>
             </div>
           </div>
         </div>
@@ -169,32 +194,63 @@
             <h2 style="margin:0;">Benchmark history</h2>
             <button id="clearHistory" class="secondary" style="width:auto; margin:0; padding:6px 12px; font-size:12px;">Clear</button>
           </div>
+          <div style="overflow-x:auto;">
           <table id="history" style="margin-top:14px;">
             <thead>
               <tr>
-                <th>Job</th><th>Iters</th><th>Frames</th><th>Res</th>
-                <th>Frames</th><th>Poses</th><th>Train</th><th>Convert</th><th>Total</th>
+                <th>Job</th>
+                <th>Backend</th><th>Matcher</th><th>Strategy</th>
+                <th>Iters</th><th>Frames</th><th>Res</th>
+                <th>Cams</th><th>Pts</th><th>Gauss</th>
+                <th>Frame&nbsp;s</th><th>Pose&nbsp;s</th><th>Train&nbsp;s</th><th>Clean&nbsp;s</th><th>Conv&nbsp;s</th><th>Total</th>
               </tr>
             </thead>
             <tbody></tbody>
           </table>
-          <div class="hint">Stage times are poll-sampled (~1s granularity), good for relative comparison.</div>
+          </div>
+          <div class="hint">Config columns (backend/matcher/strategy + cams/pts/gauss) come from the worker's <code>/api/v1/config</code> and the job's stage details. Stage times are poll-sampled (~1s granularity), good for relative comparison.</div>
         </div>
       </section>
     </main>
 
     <script>
       const $ = (id) => document.getElementById(id);
-      const STAGES = ["frame_extraction", "pose_estimation", "training", "conversion"];
+      const STAGES = ["frame_extraction", "pose_estimation", "training", "cleanup", "conversion"];
       const STAGE_LABEL = {
         frame_extraction: "Frame extraction",
         pose_estimation: "Pose estimation",
         training: "Training",
+        cleanup: "Cleanup",
         conversion: "Conversion",
       };
 
-      // Persist worker URL between sessions
-      $("worker").value = localStorage.getItem("benchWorkerUrl") || "http://localhost:8000";
+      // "Use worker defaults" toggle: when on, the benchmark sends no per-job
+      // overrides, so the worker applies its config.py defaults (the quality-
+      // tuned values). The param fields are disabled to make that explicit, and
+      // the state is persisted across sessions like the worker URL.
+      const DEFAULTS_FIELDS = ["iters", "frames", "res", "format"];
+      function syncDefaultsToggle() {
+        const on = $("useDefaults").checked;
+        for (const id of DEFAULTS_FIELDS) $(id).disabled = on;
+        localStorage.setItem("benchUseDefaults", on ? "1" : "0");
+      }
+      $("useDefaults").checked = localStorage.getItem("benchUseDefaults") === "1";
+      $("useDefaults").addEventListener("change", syncDefaultsToggle);
+      syncDefaultsToggle();
+
+      // Persist worker URL between sessions. Default to the SAME host the page
+      // was loaded from (the worker almost always runs alongside this dev
+      // server), so opening the page over the LAN doesn't leave "localhost"
+      // pointing at the viewing device instead of the worker machine.
+      const pageHost = location.hostname || "localhost";
+      const defaultWorker = `http://${pageHost}:8000`;
+      const savedWorker = localStorage.getItem("benchWorkerUrl");
+      const isLoopback = (u) => /^https?:\/\/(localhost|127\.0\.0\.1)\b/i.test(u || "");
+      // A saved "localhost" URL is stale when we're viewing over the network.
+      $("worker").value =
+        savedWorker && !(isLoopback(savedWorker) && pageHost !== "localhost" && pageHost !== "127.0.0.1")
+          ? savedWorker
+          : defaultWorker;
       $("worker").addEventListener("change", () =>
         localStorage.setItem("benchWorkerUrl", $("worker").value.trim())
       );
@@ -202,49 +258,132 @@
       const fmt = (ms) => (ms == null ? "—" : (ms / 1000).toFixed(1) + "s");
       const workerBase = () => $("worker").value.trim().replace(/\/$/, "");
 
-      // --- Benchmark history (persisted in localStorage) ---
-      const HISTORY_KEY = "benchHistory";
+      // --- Quick sample videos (served from development/public) ---
+      let selectedSample = null;
+      const sampleButtons = Array.from(document.querySelectorAll(".sample"));
+      function clearSampleSelection() {
+        selectedSample = null;
+        sampleButtons.forEach((b) => b.classList.remove("selected"));
+      }
+      sampleButtons.forEach((btn) => {
+        btn.addEventListener("click", () => {
+          selectedSample = { url: btn.dataset.url, name: btn.dataset.name };
+          sampleButtons.forEach((b) => b.classList.toggle("selected", b === btn));
+          $("video").value = ""; // a sample overrides any chosen file
+          showError(null);
+        });
+      });
+      // Choosing a file manually overrides any selected sample.
+      $("video").addEventListener("change", () => {
+        if ($("video").files[0]) clearSampleSelection();
+      });
 
-      function loadHistory() {
+      // --- Benchmark history (persisted server-side at /api/benchmark) ---
+      // Served from the dev server (same origin as this page), so results are
+      // durable and shared across browsers/devices instead of per-localStorage.
+      // Fetch the worker's effective config (matcher/strategy/defaults) so each
+      // run records WHICH settings produced it. Returns {} for older workers
+      // that don't expose /api/v1/config (the new columns just show "—").
+      async function fetchWorkerConfig() {
         try {
-          return JSON.parse(localStorage.getItem(HISTORY_KEY)) || [];
+          const r = await fetch(workerBase() + "/api/v1/config");
+          if (!r.ok) return {};
+          return await r.json();
         } catch {
-          return [];
+          return {};
         }
       }
 
+      // Derive backend / cameras / points / gaussians from the job's stage
+      // detail strings + the worker config. Tolerant of v1 and v2 detail
+      // formats ("colmap: 40/40 cams, 18452 pts" or "colmap: N points, M cameras").
+      function parseJobMeta(job, wc) {
+        const stages = job.stages || [];
+        const detail = (n) => ((stages.find((s) => s.name === n) || {}).detail || "");
+        const pose = detail("pose_estimation");
+        const clean = detail("cleanup");
+
+        const backend = (pose.split(":")[0] || "").trim() || "—";
+        const camM = pose.match(/(\d+)\s*\/\s*(\d+)\s*cam/i) || pose.match(/(\d+)\s*cameras/i);
+        const cams = camM ? (camM[2] ? `${camM[1]}/${camM[2]}` : camM[1]) : "";
+        const ptsM = pose.match(/(\d+)\s*(?:pts|points)/i);
+        const points = ptsM ? Number(ptsM[1]).toLocaleString() : "";
+        const keptM = clean.match(/(\d+)\s*kept/i);
+        const gaussians = keptM
+          ? Number(keptM[1]).toLocaleString()
+          : (/skip/i.test(clean) ? "no-prune" : "");
+        const isColmap = backend.toLowerCase().startsWith("colmap");
+        return {
+          backend,
+          matcher: isColmap ? (wc.colmap_matcher || "?") : "—",
+          strategy: wc.lichtfeld_strategy || "—",
+          cams,
+          points,
+          gaussians,
+        };
+      }
+
       function historyRowHtml(r) {
+        const c = (v) => (v === undefined || v === null || v === "" ? "—" : v);
         return `
-          <td>${r.jobId}</td>
-          <td>${r.iters}</td>
-          <td>${r.frames}</td>
-          <td>${r.res}</td>
+          <td>${c(r.jobId)}</td>
+          <td>${c(r.backend)}</td>
+          <td>${c(r.matcher)}</td>
+          <td>${c(r.strategy)}</td>
+          <td>${c(r.iters)}</td>
+          <td>${c(r.frames)}</td>
+          <td>${c(r.res)}</td>
+          <td>${c(r.cams)}</td>
+          <td>${c(r.points)}</td>
+          <td>${c(r.gaussians)}</td>
           <td>${fmt(r.frame_extraction)}</td>
           <td>${fmt(r.pose_estimation)}</td>
           <td>${fmt(r.training)}</td>
+          <td>${fmt(r.cleanup)}</td>
           <td>${fmt(r.conversion)}</td>
           <td><b>${fmt(r.total)}</b></td>`;
       }
 
-      function renderHistory() {
+      function renderHistoryRecords(records) {
         const tbody = $("history").querySelector("tbody");
         tbody.innerHTML = "";
-        for (const r of loadHistory()) {
+        for (const r of records) {
           const tr = document.createElement("tr");
-          tr.innerHTML = historyRowHtml(r);
-          tbody.appendChild(tr); // newest first (we unshift on save)
+          tr.innerHTML = historyRowHtml(r); // server returns newest-first
+          tbody.appendChild(tr);
         }
       }
 
-      function addHistory(record) {
-        const hist = loadHistory();
-        hist.unshift(record);
-        localStorage.setItem(HISTORY_KEY, JSON.stringify(hist.slice(0, 200)));
-        renderHistory();
+      async function renderHistory() {
+        try {
+          const res = await fetch("/api/benchmark");
+          if (!res.ok) throw new Error("HTTP " + res.status);
+          renderHistoryRecords(await res.json());
+        } catch (e) {
+          console.warn("Could not load benchmark history:", e);
+        }
       }
 
-      $("clearHistory").addEventListener("click", () => {
-        localStorage.removeItem(HISTORY_KEY);
+      async function addHistory(record) {
+        try {
+          const res = await fetch("/api/benchmark", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(record),
+          });
+          if (!res.ok) throw new Error("HTTP " + res.status);
+          renderHistoryRecords(await res.json());
+        } catch (e) {
+          console.warn("Could not save benchmark result:", e);
+        }
+      }
+
+      $("clearHistory").addEventListener("click", async () => {
+        try {
+          await fetch("/api/benchmark", { method: "DELETE" });
+        } catch (e) {
+          console.warn("Could not clear benchmark history:", e);
+        }
         renderHistory();
       });
 
@@ -268,16 +407,39 @@
 
       async function start() {
         if (polling) return;
-        const file = $("video").files[0];
-        if (!file) return showError("Pick a video file first.");
+        let file = $("video").files[0];
+        if (!file && !selectedSample) return showError("Pick a video file or a quick sample first.");
         showError(null);
 
-        const cfg = {
-          training_iterations: $("iters").value,
-          max_frames: $("frames").value,
-          resolution: $("res").value,
-          output_format: $("format").value,
-        };
+        // A selected quick sample is fetched from the dev server and uploaded
+        // exactly like a hand-picked file, so the worker code path is identical.
+        if (!file && selectedSample) {
+          try {
+            $("statusLine").textContent = `Loading sample ${selectedSample.name}…`;
+            const sres = await fetch(selectedSample.url);
+            if (!sres.ok) throw new Error("HTTP " + sres.status);
+            const blob = await sres.blob();
+            file = new File([blob], selectedSample.name, { type: blob.type || "video/quicktime" });
+          } catch (e) {
+            return showError("Could not load sample " + selectedSample.name + ": " + e);
+          }
+        }
+
+        // With "use worker defaults" on, send no overrides — the worker fills in
+        // every param from its config.py defaults.
+        const useDefaults = $("useDefaults").checked;
+        const cfg = useDefaults
+          ? {}
+          : {
+              training_iterations: $("iters").value,
+              max_frames: $("frames").value,
+              resolution: $("res").value,
+              output_format: $("format").value,
+            };
+
+        // Capture the worker's effective config now so we can record which
+        // matcher/strategy ran and resolve the "use defaults" values to numbers.
+        const workerConfig = await fetchWorkerConfig();
 
         const fd = new FormData();
         fd.append("video", file);
@@ -296,7 +458,14 @@
         } catch (e) {
           polling = false;
           $("start").disabled = false;
-          return showError(String(e));
+          // A TypeError here is a network-layer failure (not an HTTP status),
+          // almost always an unreachable Worker URL — the #1 gotcha when viewing
+          // this page from another device.
+          const hint =
+            e instanceof TypeError
+              ? `\n\nCould not reach the worker at ${workerBase()}. If you're viewing this page from another device, set the Worker URL above to the worker machine's LAN address (e.g. http://${pageHost}:8000) and make sure port 8000 is allowed through its firewall.`
+              : "";
+          return showError(String(e) + hint);
         }
 
         // Poll status, sampling stage-completion times.
@@ -335,7 +504,7 @@
 
           if (job.status === "completed") {
             durations.__total = elapsed;
-            return finish(jobId, durations, cfg, job);
+            return finish(jobId, durations, cfg, job, useDefaults, workerConfig);
           }
           if (job.status === "failed") {
             polling = false;
@@ -347,9 +516,10 @@
         tick();
       }
 
-      function finish(jobId, durations, cfg, job) {
+      function finish(jobId, durations, cfg, job, useDefaults, workerConfig) {
         polling = false;
         $("start").disabled = false;
+        workerConfig = workerConfig || {};
 
         const resultUrl = workerBase() + "/api/v1/jobs/" + jobId + "/result";
         const previewUrl = workerBase() + "/api/v1/jobs/" + jobId + "/preview";
@@ -364,16 +534,46 @@
           window.open("index.html?url=" + encodeURIComponent(resultUrl), "_blank");
         };
         $("downloadResult").onclick = () => window.open(resultUrl, "_blank");
+        // COLMAP dataset: only offered when the pose stage actually ran COLMAP
+        // (the stage detail is "colmap: ..." vs "dust3r: ...").
+        const poseStage = (job.stages || []).find((s) => s.name === "pose_estimation");
+        const isColmap = poseStage && (poseStage.detail || "").startsWith("colmap");
+        $("downloadDataset").style.display = isColmap ? "" : "none";
+        $("downloadDataset").onclick = () =>
+          window.open(workerBase() + "/api/v1/jobs/" + jobId + "/dataset", "_blank");
 
-        // Persist to benchmark history (survives refreshes via localStorage)
+        // When "use worker defaults" was on, resolve the actual numbers the
+        // worker applied (from /api/v1/config) instead of recording "default" —
+        // otherwise rows are uncomparable. Falls back to "default" for older
+        // workers that don't expose the config.
+        const iters = useDefaults
+          ? (workerConfig.default_training_iterations ?? "default")
+          : cfg.training_iterations;
+        const frames = useDefaults
+          ? (workerConfig.default_max_frames ?? "default")
+          : cfg.max_frames;
+        const res = useDefaults
+          ? (workerConfig.default_resolution ?? "default")
+          : cfg.resolution;
+
+        const meta = parseJobMeta(job, workerConfig);
+
+        // Persist to benchmark history (durable via the dev server).
         addHistory({
           jobId,
-          iters: cfg.training_iterations,
-          frames: cfg.max_frames,
-          res: cfg.resolution,
+          backend: meta.backend,
+          matcher: meta.matcher,
+          strategy: meta.strategy,
+          iters,
+          frames,
+          res,
+          cams: meta.cams,
+          points: meta.points,
+          gaussians: meta.gaussians,
           frame_extraction: durations.frame_extraction,
           pose_estimation: durations.pose_estimation,
           training: durations.training,
+          cleanup: durations.cleanup,
           conversion: durations.conversion,
           total: durations.__total,
         });

@@ -63,7 +63,8 @@ async def startup():
         from worker.queue_client import QueueClient
 
         queue_client = QueueClient()
-        asyncio.create_task(queue_client.run(process_remote_job))
+        # Pass the GPU lock so the client pauses claims while a job is processing.
+        asyncio.create_task(queue_client.run(process_remote_job, gpu_lock))
         logger.info("Queue polling enabled: %s", settings.queue_url)
 
 
@@ -90,10 +91,20 @@ async def health():
 async def create_job(
     video: UploadFile = File(...),
     output_format: OutputFormat = Form(default=OutputFormat.SPLAT),
-    max_frames: int = Form(default=40, ge=8, le=80),
-    training_iterations: int = Form(default=7000, ge=1000, le=30000),
-    resolution: int = Form(default=768, ge=256, le=1920),
+    # Default to None so an omitted field falls back to the configured default
+    # (settings.default_*), not a hardcoded value. This is what the benchmark's
+    # "use worker defaults" toggle relies on to actually get the tuned config.
+    max_frames: int | None = Form(default=None, ge=8, le=200),
+    training_iterations: int | None = Form(default=None, ge=1000, le=30000),
+    resolution: int | None = Form(default=None, ge=256, le=1920),
 ):
+    if max_frames is None:
+        max_frames = settings.default_max_frames
+    if training_iterations is None:
+        training_iterations = settings.default_training_iterations
+    if resolution is None:
+        resolution = settings.default_resolution
+
     # Clamp to nearest multiple of 64 for GPU efficiency
     resolution = max(256, min(1920, (resolution // 64) * 64))
 
@@ -133,6 +144,7 @@ async def create_job(
             {"name": "frame_extraction", "status": "pending"},
             {"name": "pose_estimation", "status": "pending"},
             {"name": "training", "status": "pending"},
+            {"name": "cleanup", "status": "pending"},
             {"name": "conversion", "status": "pending"},
         ],
         "error": None,
@@ -192,6 +204,26 @@ async def get_job_result(job_id: str):
     )
 
 
+@app.get("/api/v1/jobs/{job_id}/dataset")
+async def get_job_dataset(job_id: str):
+    """Download the COLMAP dataset (images + sparse model) for debugging —
+    bisect COLMAP vs training by loading it into another trainer. Only present
+    when the COLMAP backend ran (not DUSt3R) and colmap_save_dataset is on."""
+    if job_id not in jobs:
+        raise HTTPException(404, "Job not found")
+    zip_path = Path(jobs[job_id]["job_dir"]) / "colmap_dataset.zip"
+    if not zip_path.exists():
+        raise HTTPException(
+            404, "No COLMAP dataset (DUSt3R fallback ran, or job not finished)"
+        )
+    return FileResponse(
+        path=str(zip_path),
+        filename=f"colmap_dataset_{job_id}.zip",
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="colmap_dataset_{job_id}.zip"'},
+    )
+
+
 @app.get("/api/v1/jobs/{job_id}/preview")
 async def get_job_preview(job_id: str, format: str = "webp"):
     """Serve the rendered scene preview. format=webp (default) or png."""
@@ -246,43 +278,33 @@ async def process_job(job_id: str):
         video_path = Path(job["video_path"])
 
         try:
-            # Stage 1: Frame extraction
+            # Stage 1: Frame extraction. all_frames = full evenly-spaced set (for
+            # COLMAP); sharp_frames = blur-filtered subset (for training).
             _update_stage(job_id, "frame_extraction", "running")
-            frame_paths = await asyncio.to_thread(
+            all_frames, sharp_frames = await asyncio.to_thread(
                 _run_frame_extraction, video_path, job_dir, config
             )
             _update_stage(
                 job_id,
                 "frame_extraction",
                 "completed",
-                f"{len(frame_paths)} frames",
+                f"{len(sharp_frames)}/{len(all_frames)} sharp frames",
             )
 
-            # Stage 2: Pose estimation
+            # Stage 2: Pose estimation (COLMAP primary, DUSt3R fallback). COLMAP
+            # registers the full set then filters to sharp; it returns the actual
+            # (sharp, registered) frames, so rebind frame_paths to stay aligned
+            # with the poses. Intrinsics come back at the training resolution.
             _update_stage(job_id, "pose_estimation", "running")
-            poses, intrinsics, points, colors = await asyncio.to_thread(
-                _run_pose_estimation, frame_paths, config
+            poses, intrinsics, points, colors, frame_paths, backend = await asyncio.to_thread(
+                _run_pose_estimation, all_frames, sharp_frames, config
             )
             _update_stage(
                 job_id,
                 "pose_estimation",
                 "completed",
-                f"{len(points)} points, {len(poses)} poses",
+                f"{backend}: {len(points)} points, {len(poses)} cameras",
             )
-
-            # Rescale intrinsics from DUSt3R resolution to training resolution
-            if config.resolution != settings.dust3r_resolution:
-                import numpy as np
-                scale = config.resolution / settings.dust3r_resolution
-                intrinsics = intrinsics.copy()
-                intrinsics[:, 0, :] *= scale  # fx, skew, cx
-                intrinsics[:, 1, :] *= scale  # fy, cy
-                # Row 2 stays [0, 0, 1]
-                intrinsics[:, 2, :] = [0, 0, 1]
-                logger.info(
-                    "Rescaled intrinsics: DUSt3R %d -> training %d (scale=%.2f)",
-                    settings.dust3r_resolution, config.resolution, scale,
-                )
 
             # Stage 3: Training
             _update_stage(job_id, "training", "running")
@@ -295,6 +317,9 @@ async def process_job(job_id: str):
                     f"step {step}/{config.training_iterations}, loss={loss:.4f}",
                 )
 
+            # Refine poses only for DUSt3R (approximate); COLMAP poses are
+            # accurate and refining them warps the scene.
+            refine_poses = settings.pose_opt_enabled and backend == "dust3r"
             ply_path = await asyncio.to_thread(
                 _run_training,
                 points,
@@ -304,10 +329,17 @@ async def process_job(job_id: str):
                 frame_paths,
                 config,
                 on_progress,
+                job_dir,
+                refine_poses,
             )
             _update_stage(job_id, "training", "completed")
 
-            # Stage 4: Conversion (if splat format requested)
+            # Stage 4: Cleanup — prune low-confidence Gaussians from the PLY
+            _update_stage(job_id, "cleanup", "running")
+            ply_path, cleanup_stats = await asyncio.to_thread(_run_cleanup, ply_path)
+            _update_stage(job_id, "cleanup", "completed", _cleanup_detail(cleanup_stats))
+
+            # Stage 5: Conversion (if splat format requested)
             _update_stage(job_id, "conversion", "running")
             result_path = await asyncio.to_thread(
                 _run_conversion, ply_path, config
@@ -355,30 +387,28 @@ async def process_remote_job(
         # Stage 1: Frame extraction
         update_stage("frame_extraction", "running")
         await report_stages()
-        frame_paths = await asyncio.to_thread(
+        all_frames, sharp_frames = await asyncio.to_thread(
             _run_frame_extraction, video_path, job_dir, config
         )
-        update_stage("frame_extraction", "completed", f"{len(frame_paths)} frames")
+        update_stage(
+            "frame_extraction", "completed",
+            f"{len(sharp_frames)}/{len(all_frames)} sharp frames",
+        )
         await report_stages()
 
-        # Stage 2: Pose estimation
+        # Stage 2: Pose estimation (COLMAP primary, DUSt3R fallback). COLMAP runs
+        # on the full set then filters to sharp; it returns the actual (sharp,
+        # registered) frames, so rebind frame_paths to stay aligned with the poses.
         update_stage("pose_estimation", "running")
         await report_stages()
-        poses, intrinsics, points, colors = await asyncio.to_thread(
-            _run_pose_estimation, frame_paths, config
+        poses, intrinsics, points, colors, frame_paths, backend = await asyncio.to_thread(
+            _run_pose_estimation, all_frames, sharp_frames, config
         )
-        update_stage("pose_estimation", "completed", f"{len(points)} points, {len(poses)} poses")
+        update_stage(
+            "pose_estimation", "completed",
+            f"{backend}: {len(points)} points, {len(poses)} cameras",
+        )
         await report_stages()
-
-        # Rescale intrinsics
-        if config.resolution != settings.dust3r_resolution:
-            import numpy as np
-
-            scale = config.resolution / settings.dust3r_resolution
-            intrinsics = intrinsics.copy()
-            intrinsics[:, 0, :] *= scale
-            intrinsics[:, 1, :] *= scale
-            intrinsics[:, 2, :] = [0, 0, 1]
 
         # Stage 3: Training
         update_stage("training", "running")
@@ -401,13 +431,21 @@ async def process_remote_job(
                 last_report[0] = now
                 asyncio.run_coroutine_threadsafe(report_stages(), loop)
 
+        refine_poses = settings.pose_opt_enabled and backend == "dust3r"
         ply_path = await asyncio.to_thread(
-            _run_training, points, colors, poses, intrinsics, frame_paths, config, on_progress
+            _run_training, points, colors, poses, intrinsics, frame_paths, config, on_progress, job_dir, refine_poses
         )
         update_stage("training", "completed")
         await report_stages()
 
-        # Stage 4: Conversion
+        # Stage 4: Cleanup — prune low-confidence Gaussians from the PLY
+        update_stage("cleanup", "running")
+        await report_stages()
+        ply_path, cleanup_stats = await asyncio.to_thread(_run_cleanup, ply_path)
+        update_stage("cleanup", "completed", _cleanup_detail(cleanup_stats))
+        await report_stages()
+
+        # Stage 5: Conversion
         update_stage("conversion", "running")
         await report_stages()
         result_path = await asyncio.to_thread(_run_conversion, ply_path, config)
@@ -420,7 +458,10 @@ async def process_remote_job(
         return result_path
 
 
-def _run_frame_extraction(video_path: Path, job_dir: Path, config: JobConfig) -> list[Path]:
+def _run_frame_extraction(video_path: Path, job_dir: Path, config: JobConfig):
+    """Returns (all_frames, sharp_frames). all_frames is the full evenly-spaced
+    extraction (kept on disk so COLMAP's sequential matcher sees even spacing);
+    sharp_frames is the blur-filtered subset that TRAINING uses."""
     from worker.pipeline.frames import extract_frames, filter_blurry_frames, normalize_video
 
     frames_dir = job_dir / "frames"
@@ -446,25 +487,52 @@ def _run_frame_extraction(video_path: Path, job_dir: Path, config: JobConfig) ->
             normalized, frames_dir, config.max_frames, config.resolution
         )
 
-    frame_paths = filter_blurry_frames(frame_paths)
-    return frame_paths
+    # filter_blurry_frames no longer deletes — the softer frames stay on disk for
+    # COLMAP; only the sharp subset is used for training.
+    sharp_frames = filter_blurry_frames(frame_paths)
+    return frame_paths, sharp_frames
 
 
-def _run_pose_estimation(frame_paths: list[Path], config: JobConfig):
+def _run_pose_estimation(all_frames, sharp_frames, config: JobConfig):
     from worker.pipeline.poses import estimate_poses
 
-    # DUSt3R always runs at its own fixed resolution (512) for best accuracy
-    return estimate_poses(frame_paths, settings.dust3r_resolution)
+    # Dispatches to COLMAP (primary) or DUSt3R (fallback). COLMAP estimates poses
+    # on the full evenly-spaced set, then the result is filtered to sharp_frames
+    # for training. Returns poses, intrinsics, points, colors, the (sharp,
+    # registered) frame subset, and the backend name.
+    return estimate_poses(all_frames, sharp_frames, config)
 
 
-def _run_training(points, colors, poses, intrinsics, frame_paths, config: JobConfig, progress_cb):
+def _run_training(points, colors, poses, intrinsics, frame_paths, config: JobConfig, progress_cb, output_dir, optimize_poses):
     from worker.pipeline.train import train_gaussians
 
     return train_gaussians(
         points, colors, poses, intrinsics, frame_paths,
         max_steps=config.training_iterations,
         progress_cb=progress_cb,
+        output_dir=output_dir,
+        optimize_poses=optimize_poses,
     )
+
+
+def _run_cleanup(ply_path: Path):
+    """Prune low-confidence Gaussians from the trained PLY (in place)."""
+    if not settings.cleanup_enabled:
+        return ply_path, {"skipped": True}
+
+    from worker.pipeline.cleanup import clean_ply
+
+    return clean_ply(ply_path)
+
+
+def _cleanup_detail(stats: dict) -> str:
+    """Human-readable summary of a cleanup pass for the stage detail field."""
+    if stats.get("skipped"):
+        return "skipped"
+    n0 = stats.get("input", 0)
+    removed = stats.get("removed", 0)
+    pct = (removed / n0 * 100) if n0 else 0.0
+    return f"{stats.get('kept', n0)} kept, pruned {removed} ({pct:.0f}%)"
 
 
 def _run_conversion(ply_path: Path, config: JobConfig) -> Path:

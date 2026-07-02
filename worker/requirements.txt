@@ -12,4 +12,8 @@ numpy>=1.24.0
 scipy>=1.11.0
 tqdm>=4.66.0
 httpx>=0.25.0
+# COLMAP Python bindings (primary pose backend; geometric SfM). Self-contained
+# manylinux wheel — bundles COLMAP + Ceres. If it fails to install/import, the
+# pose stage falls back to DUSt3R automatically.
+pycolmap>=0.6.1
 ppisp @ git+https://github.com/nv-tlabs/ppisp.git@v1.0.0

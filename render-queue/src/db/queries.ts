@@ -16,6 +16,7 @@ export async function insertJob(
     { name: "frame_extraction", status: "pending" },
     { name: "pose_estimation", status: "pending" },
     { name: "training", status: "pending" },
+    { name: "cleanup", status: "pending" },
     { name: "conversion", status: "pending" },
   ];
 

@@ -47,16 +47,21 @@ def _se3_exp(tangent: torch.Tensor) -> torch.Tensor:
     return torch.matrix_exp(gen)
 
 
-def _load_images_as_tensors(
-    frame_paths: list[Path], device: str
-) -> list[torch.Tensor]:
-    """Load images as (C, H, W) float32 tensors on device."""
+def _load_images_as_tensors(frame_paths: list[Path]) -> list[torch.Tensor]:
+    """Load images as (C, H, W) float32 CPU tensors.
+
+    Kept on the CPU (pinned for a fast async host->device copy when CUDA is
+    available) so VRAM use is independent of the frame count: the training loop
+    moves only the current step's batch to the GPU. Holding every frame resident
+    on the GPU was the main reason a high max_frames could OOM.
+    """
+    pin = torch.cuda.is_available()
     tensors = []
     for p in frame_paths:
         img = iio.imread(str(p))  # (H, W, 3) uint8
         t = torch.from_numpy(img).float() / 255.0  # (H, W, 3)
-        t = t.permute(2, 0, 1)  # (C, H, W)
-        tensors.append(t.to(device))
+        t = t.permute(2, 0, 1).contiguous()  # (C, H, W)
+        tensors.append(t.pin_memory() if pin else t)
     return tensors
 
 
@@ -68,6 +73,8 @@ def train_gaussians(
     frame_paths: list[Path],
     max_steps: int = 3000,
     progress_cb: Optional[Callable[[int, float], None]] = None,
+    output_dir: Optional[Path] = None,
+    optimize_poses: Optional[bool] = None,
 ) -> Path:
     """
     Train 3D Gaussians from point cloud + posed images using gsplat.
@@ -89,11 +96,16 @@ def train_gaussians(
     device = settings.gpu_device
     n_images = len(frame_paths)
     n_points = len(points)
+    # Whether to jointly refine camera poses. Off for accurate (COLMAP) poses —
+    # refining already-good poses lets cameras drift and warps the scene; only
+    # worth it for approximate (DUSt3R) poses. Caller decides; default to config.
+    if optimize_poses is None:
+        optimize_poses = settings.pose_opt_enabled
     logger.info("Training gaussians: %d points, %d images, %d steps", n_points, n_images, max_steps)
 
     with gpu_memory_guard():
-        # Load training images
-        images = _load_images_as_tensors(frame_paths, device)
+        # Load training images (CPU/pinned; moved to GPU per-batch in the loop)
+        images = _load_images_as_tensors(frame_paths)
         img_h, img_w = images[0].shape[1], images[0].shape[2]
 
         # Precompute camera data
@@ -225,14 +237,27 @@ def train_gaussians(
         # warm-up that lets the Gaussians settle first.
         pose_deltas = torch.nn.Parameter(torch.zeros(n_images, 6, device=device))
         pose_opt = torch.optim.Adam([pose_deltas], lr=settings.pose_opt_lr, weight_decay=1e-6)
-        if settings.pose_opt_enabled:
+        # Exponential decay for the pose LR (mirrors means): start high enough to
+        # actually correct DUSt3R's poses, then anneal so late training is stable.
+        pose_lr_init = settings.pose_opt_lr
+        pose_lr_final = settings.pose_opt_lr_final
+        if pose_lr_final > 0 and pose_lr_init > pose_lr_final:
+            pose_lr_decay_rate = (pose_lr_final / pose_lr_init) ** (1.0 / max_steps)
+        else:
+            pose_lr_decay_rate = 1.0
+        if optimize_poses:
             logger.info(
-                "Camera pose optimization enabled (lr=%.1e, start=%d)",
-                settings.pose_opt_lr, settings.pose_opt_start,
+                "Camera pose optimization enabled (lr=%.1e->%.1e, start=%d)",
+                pose_lr_init, pose_lr_final, settings.pose_opt_start,
             )
 
-        # PPISP photometric post-processing (optional)
+        # PPISP photometric post-processing (optional, OFF by default — gated on
+        # settings.ppisp_enabled because its training-time corrections aren't
+        # applied at export and can shift the final splat's color). Reuses the
+        # except branch for both "disabled" and "not installed".
         try:
+            if not settings.ppisp_enabled:
+                raise ImportError("disabled via settings.ppisp_enabled")
             from ppisp import PPISP
             ppisp_module = PPISP(num_cameras=1, num_frames=n_images).to(device)
             ppisp_optimizers = ppisp_module.create_optimizers()
@@ -246,12 +271,12 @@ def train_gaussians(
             pixel_coords = torch.stack([xs, ys], dim=-1).float()  # (H, W, 2)
             use_ppisp = True
             logger.info("PPISP enabled: photometric correction active")
-        except ImportError:
+        except ImportError as exc:
             use_ppisp = False
             ppisp_module = None
             ppisp_optimizers = []
             ppisp_schedulers = []
-            logger.info("PPISP not installed, skipping photometric correction")
+            logger.info("PPISP off: %s", exc)
 
         # Training loop
         for step in range(max_steps):
@@ -261,7 +286,9 @@ def train_gaussians(
                     lr_decay_rate ** step
                 )
 
-            pose_active = settings.pose_opt_enabled and step >= settings.pose_opt_start
+            pose_active = optimize_poses and step >= settings.pose_opt_start
+            if pose_active and pose_lr_decay_rate < 1.0:
+                pose_opt.param_groups[0]["lr"] = pose_lr_init * (pose_lr_decay_rate ** step)
 
             for opt in optimizers.values():
                 opt.zero_grad(set_to_none=True)
@@ -325,7 +352,11 @@ def train_gaussians(
                     )
                 rendered_views.append(r.permute(2, 0, 1))  # (3, H, W)
             rendered = torch.stack(rendered_views, dim=0)  # (B, 3, H, W)
-            gt_image = torch.stack([images[i] for i in idxs], dim=0)  # (B, 3, H, W)
+            # Move only this step's batch to the GPU (non_blocking pairs with the
+            # pinned CPU tensors above for an async copy).
+            gt_image = torch.stack([images[i] for i in idxs], dim=0).to(
+                device, non_blocking=True
+            )  # (B, 3, H, W)
 
             # L1 every step; SSIM (more expensive) only every ssim_every steps.
             # Loss math optionally under autocast (rasterizer stays fp32).
@@ -387,8 +418,12 @@ def train_gaussians(
                 if progress_cb:
                     progress_cb(step, loss_val)
 
-        # Export
-        output_dir = frame_paths[0].parent.parent
+        # Export. Use the explicit job output dir when given; fall back to the
+        # frames' grandparent only for callers that don't pass one. (COLMAP
+        # undistorted frames live deeper than job_dir/frames/, so inferring the
+        # dir from them would write outputs into a subdir that cleanup wipes.)
+        if output_dir is None:
+            output_dir = frame_paths[0].parent.parent
         ply_path = output_dir / "output.ply"
         export_ply(
             ply_path,
@@ -405,7 +440,7 @@ def train_gaussians(
         try:
             preview_idx = n_images // 2
             # Use the optimized pose for this camera if pose-opt ran.
-            if settings.pose_opt_enabled:
+            if optimize_poses:
                 preview_view = (
                     _se3_exp(pose_deltas[preview_idx : preview_idx + 1])
                     @ w2c[preview_idx : preview_idx + 1]

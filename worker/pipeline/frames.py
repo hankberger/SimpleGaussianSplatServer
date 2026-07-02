@@ -135,24 +135,41 @@ def extract_frames(
     else:
         scale_filter = f"scale=-2:{resolution}"
 
-    # Try scene-change detection first
-    frames = _extract_scene_frames(
-        video_path, output_dir, max_frames, scale_filter, settings.scene_change_threshold
-    )
-
-    # Fallback to uniform temporal sampling if too few frames
-    if len(frames) < settings.min_frames:
-        logger.info(
-            "Scene detection yielded %d frames (< %d), falling back to uniform sampling",
-            len(frames),
-            settings.min_frames,
+    # A phone capture is one continuous shot, so uniform temporal sampling gives
+    # even baselines (good for pose estimation). Scene-change detection is meant
+    # for cuts in edited video and fires erratically here. Default to uniform;
+    # "scene" mode is available via config. Each falls back to the other if it
+    # yields too few frames.
+    if settings.frame_extraction_mode == "scene":
+        frames = _extract_scene_frames(
+            video_path, output_dir, max_frames, scale_filter, settings.scene_change_threshold
         )
-        # Clean up scene-detected frames
-        for f in frames:
-            f.unlink(missing_ok=True)
+        if len(frames) < settings.min_frames:
+            logger.info(
+                "Scene detection yielded %d frames (< %d), falling back to uniform sampling",
+                len(frames),
+                settings.min_frames,
+            )
+            for f in frames:
+                f.unlink(missing_ok=True)
+            frames = _extract_uniform_frames(
+                video_path, output_dir, max_frames, scale_filter, video_info
+            )
+    else:
         frames = _extract_uniform_frames(
             video_path, output_dir, max_frames, scale_filter, video_info
         )
+        if len(frames) < settings.min_frames:
+            logger.info(
+                "Uniform sampling yielded %d frames (< %d), falling back to scene detection",
+                len(frames),
+                settings.min_frames,
+            )
+            for f in frames:
+                f.unlink(missing_ok=True)
+            frames = _extract_scene_frames(
+                video_path, output_dir, max_frames, scale_filter, settings.scene_change_threshold
+            )
 
     logger.info("Extracted %d frames", len(frames))
     return frames
@@ -253,14 +270,16 @@ def filter_blurry_frames(
     keep_indices = np.sort(keep_indices)
 
     kept = [frame_paths[i] for i in keep_indices]
-    dropped = set(range(len(frame_paths))) - set(keep_indices)
-    for i in dropped:
-        frame_paths[i].unlink(missing_ok=True)
+    n_dropped = len(frame_paths) - len(kept)
 
+    # NOTE: softer frames are NOT deleted — they stay on disk so COLMAP can run
+    # pose estimation on the full, evenly-spaced set (deleting them leaves uneven
+    # temporal gaps that break the sequential matcher's small-baseline assumption).
+    # Only TRAINING uses this sharp subset; the caller decides.
     logger.info(
-        "Blur filter: kept %d/%d frames (dropped %d)",
+        "Blur filter: selected %d/%d sharpest frames for training (%d softer kept on disk)",
         len(kept),
         len(frame_paths),
-        len(dropped),
+        n_dropped,
     )
     return kept

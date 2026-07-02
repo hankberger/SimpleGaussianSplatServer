@@ -1,0 +1,7 @@
+# Keep the build context lean: ship bin/ lib/ share/ splatworker/ + requirements,
+# but never job artifacts, caches, or local env files.
+jobs/
+**/__pycache__/
+*.pyc
+.env
+*.log
